@@ -8,6 +8,7 @@ import Liquidity from './pages/Liquidity.tsx'
 import Payments from './pages/Payments.tsx'
 import Lending from './pages/Lending.tsx'
 import Trade from './pages/Trade.tsx'
+import ExchangeTrade from './pages/ExchangeTrade.tsx'
 
 const Vault = lazy(() => import('./three/Vault.tsx'))
 
@@ -97,7 +98,7 @@ function Shell() {
               animate={{ opacity: 1, filter: 'blur(0px)' }}
               transition={{ duration: 0.4 }}
             >
-              {tab === 'trade' && <Trade />}
+              {tab === 'trade' && (config?.exchange ? <ExchangeTrade /> : <Trade />)}
               {tab === 'liquidity' && <Liquidity />}
               {tab === 'payments' && <Payments />}
               {tab === 'lending' && <Lending />}

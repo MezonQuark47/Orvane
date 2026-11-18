@@ -23,6 +23,9 @@ export default defineConfig(async ({ mode }) => {
           changeOrigin: true,
           headers: token ? { authorization: `Bearer ${token}` } : undefined,
         },
+        // Token-standard registry + Scan (LocalNet). Must come before /api.
+        '/registry': { target: 'http://scan.localhost:4000', changeOrigin: true },
+        '/api/scan': { target: 'http://scan.localhost:4000', changeOrigin: true },
         '/api': 'http://localhost:7600',
       },
       fs: { allow: ['..'] },

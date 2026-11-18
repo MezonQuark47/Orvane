@@ -235,11 +235,46 @@ export class JsonLedger {
     return out
   }
 
-  async submit(actAs: string[], commands: DamlCommand[], readAs: string[] = []): Promise<Transaction> {
+  // `disclosedContracts` lets the command use contracts the submitters don't
+  // hold themselves (e.g. AmuletRules handed out by Scan).
+  async submit(
+    actAs: string[],
+    commands: DamlCommand[],
+    readAs: string[] = [],
+    disclosedContracts: Array<{ templateId: string; contractId: string; createdEventBlob: string; synchronizerId: string }> = [],
+  ): Promise<Transaction> {
     const r = await this.call<{ transaction: Transaction }>('/v2/commands/submit-and-wait-for-transaction', {
-      commands: { commands, commandId: newCommandId(), userId: this.userId, actAs, readAs },
+      commands: { commands, commandId: newCommandId(), userId: this.userId, actAs, readAs, disclosedContracts },
+      transactionFormat: {
+        eventFormat: { filtersByParty: Object.fromEntries(actAs.map((p) => [p, { cumulative: [] }])), verbose: true },
+        transactionShape: 'TRANSACTION_SHAPE_LEDGER_EFFECTS',
+      },
     })
     return r.transaction
+  }
+
+  // Active contracts implementing an interface, with their interface view.
+  async queryInterface<V>(party: string, interfaceId: string): Promise<Array<{ contractId: string; templateId: string; view: V }>> {
+    const activeAtOffset = await this.ledgerEnd()
+    const rows = await this.call<
+      Array<{ contractEntry: { JsActiveContract?: { createdEvent: CreatedEvent & { interfaceViews?: Array<{ viewValue?: unknown }> } } } }>
+    >('/v2/state/active-contracts', {
+      eventFormat: {
+        filtersByParty: {
+          [party]: {
+            cumulative: [
+              { identifierFilter: { InterfaceFilter: { value: { interfaceId, includeInterfaceView: true, includeCreatedEventBlob: false } } } },
+            ],
+          },
+        },
+        verbose: true,
+      },
+      activeAtOffset,
+    })
+    return rows
+      .map((r) => r.contractEntry.JsActiveContract?.createdEvent)
+      .filter((e): e is NonNullable<typeof e> => !!e && !!e.interfaceViews?.[0]?.viewValue)
+      .map((e) => ({ contractId: e.contractId, templateId: e.templateId, view: e.interfaceViews![0].viewValue as V }))
   }
 }
 

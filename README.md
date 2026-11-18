@@ -90,6 +90,28 @@ Colleagues and lenders never see who took an advance.
 The demo market runs on a compressed clock (one year of interest per hour, set by
 `yearSeconds`) so interest is visible while you watch.
 
+## Real Canton Coin: token-standard exchange
+
+On LocalNet, Trade runs against a USDx / **Canton Coin** pool that settles exclusively through the
+Canton Network Token Standard (CIP-56). The exchange contract never touches a token
+implementation; it only sees `Allocation`s, so Canton Coin (Amulet, registry served by Scan) and
+Orvane USDx (our own registry) are handled by the same code.
+
+```
+Trader   --one signature-->  ExchangeSwapOrder_Place
+                              ├─ AllocationFactory_Allocate   (CC locked: trader -> operator, executor operator)
+                              └─ ExchangeSwapRequest          (visible to trader + operator)
+Operator --allocates-->       output from the pool's reserves (operator -> trader)
+Operator --settles-->         ExchangeSwapRequest_Settle, one atomic transaction:
+                              ├─ ExchangePool_Swap            (x*y=k accounting, can't pay above the quote)
+                              ├─ Allocation_ExecuteTransfer   (input leg)
+                              └─ Allocation_ExecuteTransfer   (output leg)
+```
+
+Choice contexts and disclosed contracts (AmuletRules, open mining round) come from the registry's
+off-ledger API and are passed through untouched. If a trade can't be filled, the operator cancels
+the trader's allocation and the funds are released.
+
 ## Repository layout
 
 | Path | What it is |
@@ -98,8 +120,9 @@ The demo market runs on a compressed clock (one year of interest per hour, set b
 | `daml/orvane-payments` | Payroll (`PayrollOrder`, `Payslip`, `PayrollAttestation`, `PayoutPreference`, `PayoutRequest`) and invoices (`Invoice`, `InvoiceSettlement`, `PaidInvoice`, `DisputedInvoice`). Depends on `orvane-amm` |
 | `daml/orvane-lending` | Lending market (`LendingMarket`, `SupplyPosition`, `Loan`, borrow/supply orders) and wage advances (`AdvanceLine`, `Advance`, `PayrollWithAdvances`). Depends on both packages above |
 | `daml/orvane-registry` | CIP-56 token registry for Orvane test instruments (USDx): `OrvaneHolding`, `OrvaneRules` (TransferFactory, AllocationFactory), `OrvaneAllocation`. Built on the official Splice token standard interfaces vendored in `daml/dars` |
+| `daml/orvane-exchange` | Token-standard exchange: `ExchangePool`, `ExchangeSwapOrder` (allocate input + file request in one signature), `ExchangeSwapRequest` (atomic DvP settlement), `ExchangeReceipt` |
 | `daml/orvane-amm-test` | Daml Script tests, kept in a separate package so test code is never uploaded to a validator |
-| `shared/` | TypeScript JSON Ledger API v2 client, contract types, command builders and pricing math, used by both the operator and the web app |
+| `shared/` | TypeScript JSON Ledger API v2 client (with LocalNet dev JWT), contract types, command builders, pricing math, Scan / token-standard registry client (`amulet.ts`) and registry abstraction (`exchange.ts`). Used by both the operator and the web app |
 | `operator/` | Node service that uploads the contracts, bootstraps a demo world and settles requests (no dependencies, Node 22.18+) |
 | `frontend/` | React web app: React Three Fiber scene, Motion, Radix UI, Five North Loop SDK |
 
@@ -172,7 +195,7 @@ You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com) and Java 17 or ne
 ./scripts/test.sh
 ```
 
-All 38 scripts should pass.
+All 44 scripts should pass.
 
 | Test | Checks |
 |---|---|
@@ -203,13 +226,15 @@ All 38 scripts should pass.
 | `test_advanceRepaidFromPayroll` | advance drawn, then repaid out of payroll under one signature |
 | `test_advanceLimits` | above-limit and second open advance are rejected |
 | `test_mintExposesHoldingView` … `test_settlementDeadline` | registry conformance: Holding view, transfers, DvP with two allocations settled atomically, executor cannot settle alone, withdraw, deadlines |
+| `test_swapSettlesAtomically` … `test_orderMustPayTheOperator` | exchange: atomic two-leg settlement, no overpaying from reserves, slippage reject releases funds, mismatched allocations and orders rejected, outsiders see nothing |
 
 ## Roadmap
 
 1. Private AMM: swap, liquidity, LP shares (done)
 2. Web app: React with [Loop SDK](https://docs.fivenorth.io/loop-sdk/overview/) wallet connection (done, local sandbox)
 3. Operator service that settles requests through the Ledger API (done, local sandbox)
-4. LocalNet deployment (done) and a CIP-56 registry for USDx (done); next: settling pool, payroll
+4. LocalNet deployment (done), CIP-56 registry for USDx (done), USDx / Canton Coin exchange settling
+   through token-standard allocations (done); next: payroll
    and lending through token-standard allocations with real Canton Coin, then DevNet
 5. Payments: private payroll and B2B invoices settled through the pool (done, local sandbox)
 6. Lending: collateralized loans with pool-priced liquidation and earned-wage advances (done, local sandbox)

@@ -1,0 +1,200 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Private constant-product exchange that settles through the Canton
+-- Network Token Standard (CIP-56). It never touches a token implementation
+-- directly: inputs and outputs are allocations, so the same pool trades
+-- Canton Coin, Orvane USDx or any other standard asset.
+--
+-- A swap, end to end:
+--   1. Trader signs one command: ExchangeSwapOrder_Place allocates the input
+--      (sender trader, receiver operator, executor operator) and files an
+--      ExchangeSwapRequest. Only trader and operator see it.
+--   2. Operator allocates the output from the pool's reserves to the trader.
+--   3. Operator settles: both allocations execute and the pool's accounting
+--      moves, in one atomic transaction. If anything fails, nothing moves.
+--
+-- Members see the pool's reserves change, never who traded.
+module Orvane.Exchange where
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1 (InstrumentId(..), Holding)
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+
+import Orvane.Math (getAmountOut)
+
+-- ---------------------------------------------------------------- pool
+
+-- | Accounting for a pair. The reserves themselves are standard holdings
+-- owned by the operator.
+template ExchangePool
+  with
+    operator : Party
+    poolId   : Text
+    instrA   : InstrumentId
+    instrB   : InstrumentId
+    reserveA : Decimal
+    reserveB : Decimal
+    feeBps   : Decimal
+    members  : [Party]
+  where
+    signatory operator
+    observer members
+    ensure instrA /= instrB && reserveA >= 0.0 && reserveB >= 0.0
+      && feeBps >= 0.0 && feeBps < 1000.0
+
+    -- | Book a swap. `amountOut` is what the operator allocated; it may be
+    -- rounded down from the exact quote, never up, so k never decreases.
+    choice ExchangePool_Swap : ContractId ExchangePool
+      with
+        inInstrument : InstrumentId
+        amountIn     : Decimal
+        amountOut    : Decimal
+        minOut       : Decimal
+      controller operator
+      do
+        assertMsg "pool has no liquidity" (reserveA > 0.0 && reserveB > 0.0)
+        assertMsg "amount in must be positive" (amountIn > 0.0)
+        let isA = inInstrument == instrA
+        assertMsg "instrument not in this pool" (isA || inInstrument == instrB)
+        let (resIn, resOut) = if isA then (reserveA, reserveB) else (reserveB, reserveA)
+            quote = getAmountOut feeBps amountIn resIn resOut
+        assertMsg "output above the pool's quote" (amountOut <= quote)
+        assertMsg "slippage: output below minimum" (amountOut >= minOut && amountOut > 0.0)
+        if isA
+          then create this with reserveA = reserveA + amountIn, reserveB = reserveB - amountOut
+          else create this with reserveB = reserveB + amountIn, reserveA = reserveA - amountOut
+
+    -- | Record liquidity the operator added to the reserves.
+    choice ExchangePool_Fund : ContractId ExchangePool
+      with
+        addA : Decimal
+        addB : Decimal
+      controller operator
+      do create this with reserveA = reserveA + addA, reserveB = reserveB + addB
+
+    choice ExchangePool_SetMembers : ContractId ExchangePool
+      with
+        newMembers : [Party]
+      controller operator
+      do create this with members = newMembers
+
+-- | The other instrument of the pair.
+counterpart : ExchangePool -> InstrumentId -> InstrumentId
+counterpart pool i = if i == pool.instrA then pool.instrB else pool.instrA
+
+-- ---------------------------------------------------------------- swap
+
+-- | Wallet-friendly entry point: one createAndExercise allocates the input
+-- through its registry's AllocationFactory and files the swap request.
+-- `extraArgs` and the factory are what the registry's off-ledger API returns.
+template ExchangeSwapOrder
+  with
+    trader           : Party
+    operator         : Party
+    poolId           : Text
+    factoryCid       : ContractId AllocationFactory
+    expectedAdmin    : Party
+    allocation       : AllocationSpecification
+    requestedAt      : Time
+    inputHoldingCids : [ContractId Holding]
+    extraArgs        : ExtraArgs
+    minOut           : Decimal
+  where
+    signatory trader
+
+    choice ExchangeSwapOrder_Place : ContractId ExchangeSwapRequest
+      controller trader
+      do
+        let leg = allocation.transferLeg
+            s = allocation.settlement
+        assertMsg "input must go from the trader to the operator"
+          (leg.sender == trader && leg.receiver == operator && s.executor == operator)
+        res <- exercise factoryCid AllocationFactory_Allocate with
+          expectedAdmin, allocation, requestedAt, inputHoldingCids, extraArgs
+        allocCid <- case res.output of
+          AllocationInstructionResult_Completed c -> pure c
+          _ -> abort "the registry did not complete the allocation immediately"
+        create ExchangeSwapRequest with
+          trader, operator, poolId
+          inputAllocationCid = allocCid
+          inputInstrument = leg.instrumentId
+          amountIn = leg.amount
+          minOut
+          settlementRef = s.settlementRef.id
+
+-- | A trader's signed swap. Visible to the trader and the operator only.
+template ExchangeSwapRequest
+  with
+    trader             : Party
+    operator           : Party
+    poolId             : Text
+    inputAllocationCid : ContractId Allocation
+    inputInstrument    : InstrumentId
+    amountIn           : Decimal
+    minOut             : Decimal
+    settlementRef      : Text
+  where
+    signatory trader
+    observer operator
+
+    -- | Settle both legs and book the trade, atomically.
+    choice ExchangeSwapRequest_Settle : ContractId ExchangeReceipt
+      with
+        poolCid             : ContractId ExchangePool
+        outputAllocationCid : ContractId Allocation
+        inputExtraArgs      : ExtraArgs
+        outputExtraArgs     : ExtraArgs
+      controller operator
+      do
+        pool <- fetch poolCid
+        assertMsg "wrong pool" (pool.poolId == poolId && pool.operator == operator)
+        inV <- view <$> fetch inputAllocationCid
+        let inLeg = inV.allocation.transferLeg
+        assertMsg "input allocation does not match the request"
+          (inLeg.sender == trader && inLeg.receiver == operator
+            && inV.allocation.settlement.executor == operator
+            && inV.allocation.settlement.settlementRef.id == settlementRef
+            && inLeg.instrumentId == inputInstrument && inLeg.amount == amountIn)
+        outV <- view <$> fetch outputAllocationCid
+        let outLeg = outV.allocation.transferLeg
+            outInstrument = counterpart pool inputInstrument
+        assertMsg "output allocation does not match the request"
+          (outLeg.sender == operator && outLeg.receiver == trader
+            && outV.allocation.settlement.executor == operator
+            && outV.allocation.settlement.settlementRef.id == settlementRef
+            && outLeg.instrumentId == outInstrument)
+        _ <- exercise poolCid ExchangePool_Swap with
+          inInstrument = inputInstrument, amountIn, amountOut = outLeg.amount, minOut
+        _ <- exercise inputAllocationCid Allocation_ExecuteTransfer with extraArgs = inputExtraArgs
+        _ <- exercise outputAllocationCid Allocation_ExecuteTransfer with extraArgs = outputExtraArgs
+        create ExchangeReceipt with
+          operator, trader, poolId, settlementRef
+          instrumentIn = inputInstrument, amountIn
+          instrumentOut = outInstrument, amountOut = outLeg.amount
+
+    -- | The operator can't fill it: give the trader's funds back.
+    choice ExchangeSwapRequest_Reject : ()
+      with
+        reason        : Text
+        cancelArgs    : ExtraArgs
+      controller operator
+      do
+        _ <- exercise inputAllocationCid Allocation_Cancel with extraArgs = cancelArgs
+        pure ()
+
+-- | Private trade confirmation.
+template ExchangeReceipt
+  with
+    operator      : Party
+    trader        : Party
+    poolId        : Text
+    settlementRef : Text
+    instrumentIn  : InstrumentId
+    amountIn      : Decimal
+    instrumentOut : InstrumentId
+    amountOut     : Decimal
+  where
+    signatory operator
+    observer trader

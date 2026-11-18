@@ -14,6 +14,7 @@ import { createServer } from 'node:http'
 import { JsonLedger, LedgerError, createdOf, type Contract } from '../shared/ledger.ts'
 import { T, dec, exercise, placeLiquidity, type Pool, type Token } from '../shared/amm.ts'
 import { P, issueInvoice, setPreference } from '../shared/payments.ts'
+import { bootstrapExchange, exchangeContext, fundTrader, settleExchangeOnce, EXCHANGE_POOL_ID, type ExchangeCtx } from './exchange.ts'
 import { L, borrow, healthFactor, marketView, owedAt, supply, type LendingMarket, type Loan } from '../shared/lending.ts'
 
 // ORVANE_NETWORK=sandbox (default): `dpm sandbox`, no auth.
@@ -43,6 +44,7 @@ const DARS = [
   new URL('../daml/orvane-payments/.daml/dist/orvane-payments-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-lending/.daml/dist/orvane-lending-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-registry/.daml/dist/orvane-registry-0.1.0.dar', import.meta.url),
+  new URL('../daml/orvane-exchange/.daml/dist/orvane-exchange-0.1.0.dar', import.meta.url),
 ]
 
 // Admin client (allocates parties, uploads DARs). On LocalNet every call is
@@ -281,6 +283,9 @@ async function bootstrapLending(p: Parties) {
   }
 }
 
+let exchange: ExchangeCtx | undefined
+const exchangeParties = (p: Parties) => ({ operator: p.operator, usdIssuer: p.usdIssuer, traders: [p.alice, p.bob, p.carol, p.acme, p.nova] })
+
 async function bootstrap(): Promise<Parties> {
   await uploadDars()
   const p = await ensureParties()
@@ -293,6 +298,11 @@ async function bootstrap(): Promise<Parties> {
   await bootstrapMarket(p)
   await bootstrapBusiness(p)
   await bootstrapLending(p)
+  if (NETWORK_NAME === 'localnet') {
+    // Real Canton Coin is only available on a Splice network.
+    exchange = await exchangeContext(() => ledger, log, exchangeParties(p))
+    await bootstrapExchange(exchange, exchangeParties(p))
+  }
   log('demo world ready')
   return p
 }
@@ -400,6 +410,7 @@ async function settleLoop(p: Parties) {
     try {
       await settleOnce(p)
       await liquidateOnce(p)
+      if (exchange) await settleExchangeOnce(exchange, p.operator)
     } catch (err) {
       log('settle error', err instanceof Error ? err.message : err)
     }
@@ -423,6 +434,7 @@ function serve(p: Parties) {
           poolId: POOL_ID,
           marketId: MARKET_ID,
           network: NETWORK_NAME,
+          exchange: exchange ? { poolId: EXCHANGE_POOL_ID, usdx: exchange.usdx, amulet: exchange.amulet } : undefined,
           operator: p.operator,
           issuers: { USDx: p.usdIssuer, CCx: p.ccIssuer },
           business: { employer: p.acme, supplier: p.nova, auditor: p.auditor, employees: [p.alice, p.bob, p.carol] },
@@ -445,6 +457,7 @@ function serve(p: Parties) {
         if (now - (lastDrip.get(party) ?? 0) < 5_000) return send(429, { error: 'slow down' })
         lastDrip.set(party, now)
         await fund(p, party, 1_000, 5_000)
+        if (exchange) await fundTrader(exchange, exchangeParties(p), party)
         return send(200, { ok: true, minted: { USDx: 1000, CCx: 5000 } })
       }
       send(404, { error: 'not found' })
