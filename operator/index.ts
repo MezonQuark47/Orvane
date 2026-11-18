@@ -47,8 +47,8 @@ const DARS = [
   new URL('../daml/orvane-lending/.daml/dist/orvane-lending-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-registry/.daml/dist/orvane-registry-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-exchange/.daml/dist/orvane-exchange-0.1.0.dar', import.meta.url),
-  new URL('../daml/orvane-treasury/.daml/dist/orvane-treasury-0.1.0.dar', import.meta.url),
-  new URL('../daml/orvane-credit/.daml/dist/orvane-credit-0.1.0.dar', import.meta.url),
+  new URL('../daml/orvane-treasury/.daml/dist/orvane-treasury-0.2.0.dar', import.meta.url),
+  new URL('../daml/orvane-credit/.daml/dist/orvane-credit-0.2.0.dar', import.meta.url),
 ]
 
 // Admin client (allocates parties, uploads DARs). On LocalNet every call is

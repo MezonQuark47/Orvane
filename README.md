@@ -219,7 +219,9 @@ On the sandbox, the token-standard flows (exchange, payroll, invoices, advances,
 issued by the Orvane registry instead of Canton Coin, so everything can be developed and tested
 without Docker. LocalNet runs the same contracts against real Canton Coin.
 
-`./scripts/localnet.ps1 stop` pauses LocalNet and keeps its data; `up` resumes it.
+`./scripts/localnet.ps1 stop` pauses LocalNet and keeps its data; `up` resumes it. When a package gains
+new modules, bump its version (e.g. `orvane-treasury` and `orvane-credit` are at 0.2.0): Canton's
+smart contract upgrade then accepts it next to the old version and existing contracts keep working.
 
 LocalNet uses the `unsafe` HS256 development secret that ships with Splice. It is for local
 development only. Wallet UIs: http://wallet.localhost:3000 (app provider), Scan: http://scan.localhost:4000.
