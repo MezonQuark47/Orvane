@@ -5,4 +5,5 @@ packages:
   - ./orvane-registry
   - ./orvane-exchange
   - ./orvane-treasury
+  - ./orvane-credit
   - ./orvane-amm-test

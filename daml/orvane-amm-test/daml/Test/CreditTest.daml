@@ -1,0 +1,222 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+module Test.CreditTest where
+
+import DA.Assert
+import DA.Optional (isNone, isSome)
+import DA.Time (hours)
+import Daml.Script
+
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+
+import Orvane.Credit
+import Orvane.Exchange
+import Orvane.Math (getAmountOut)
+import Test.ExchangeTest
+import Test.RegistryTest
+
+data Cr = Cr with
+    ex : Ex
+    market : ContractId CreditMarket
+
+-- USDx market with CCx collateral, priced by the exchange pool (0.20).
+-- One year of interest per hour. Alice supplies 20,000 USDx.
+crSetup : Script Cr
+crSetup = do
+  ex <- exSetup
+  let r = ex.r
+  m0 <- submit r.venue do
+    createCmd CreditMarket with
+      operator = r.venue, marketId = "USDx-credit"
+      asset = usdx r.admin, collateral = ccx r.admin, poolId = "USDx-CCx"
+      cash = 0.0, principalOut = 0.0, totalShares = 0.0
+      baseAprBps = 200.0, slopeAprBps = 1800.0, maxLtvBps = 6000.0, liqLtvBps = 8000.0
+      yearSeconds = 3600, badDebt = 0.0, members = [r.alice, r.bob, r.carol]
+  _ <- mintTo r "USDx" r.alice 20000.0
+  now <- getTime
+  inputs <- map fst <$> holdingsOf r.alice "USDx"
+  req <- submit r.alice do
+    createAndExerciseCmd
+      (CreditSupplyOrder with
+        lender = r.alice, operator = r.venue, marketId = "USDx-credit"
+        factoryCid = toInterfaceContractId @AllocationFactory r.rules, expectedAdmin = r.admin
+        allocation = spec r now "supply-1" r.alice r.venue (usdx r.admin) 20000.0
+        requestedAt = now, inputHoldingCids = inputs, extraArgs = noArgs)
+      CreditSupplyOrder_Place
+  _ <- submit r.venue do exerciseCmd req CreditSupplyRequest_Settle with marketCid = m0, extraArgs = noArgs
+  [(m, _)] <- query @CreditMarket r.venue
+  pure Cr with ex, market = m
+
+spec r now ref sender receiver instrument amount = AllocationSpecification with
+  settlement = mkSettlement r now ref
+  transferLegId = "leg"
+  transferLeg = TransferLeg with sender, receiver, amount, instrumentId = instrument, meta = emptyMeta
+
+currentMarket : Cr -> Script (ContractId CreditMarket, CreditMarket)
+currentMarket c = do
+  [x] <- query @CreditMarket c.ex.r.venue
+  pure x
+
+currentPool : Cr -> Script (ContractId ExchangePool, ExchangePool)
+currentPool c = do
+  [x] <- query @ExchangePool c.ex.r.venue
+  pure x
+
+-- Bob locks `coll` CCx and borrows `amount` USDx.
+borrowCn : Cr -> Decimal -> Decimal -> Text -> Script (ContractId CreditBorrowRequest)
+borrowCn c coll amount ref = do
+  let r = c.ex.r
+  _ <- mintTo r "CCx" r.bob coll
+  now <- getTime
+  inputs <- map fst <$> holdingsOf r.bob "CCx"
+  submit r.bob do
+    createAndExerciseCmd
+      (CreditBorrowOrder with
+        borrower = r.bob, operator = r.venue, marketId = "USDx-credit"
+        factoryCid = toInterfaceContractId @AllocationFactory r.rules, expectedAdmin = r.admin
+        allocation = spec r now ref r.bob r.venue (ccx r.admin) coll
+        requestedAt = now, inputHoldingCids = inputs, extraArgs = noArgs, borrowAmount = amount)
+      CreditBorrowOrder_Place
+
+operatorAllocates : Cr -> Text -> Party -> Text -> Decimal -> Script (ContractId Allocation)
+operatorAllocates c instrument receiver ref amount = do
+  let r = c.ex.r
+  now <- getTime
+  inputs <- map fst <$> holdingsOf r.venue instrument
+  let i = if instrument == "USDx" then usdx r.admin else ccx r.admin
+  allocate r (mkSettlement r now ref) "leg" r.venue receiver i amount inputs
+
+settleBorrow : Cr -> ContractId CreditBorrowRequest -> Decimal -> Text -> Script (ContractId CreditLoan)
+settleBorrow c req amount ref = do
+  out <- operatorAllocates c "USDx" c.ex.r.bob ref amount
+  (mc, _) <- currentMarket c
+  (pc, _) <- currentPool c
+  submit c.ex.r.venue do
+    exerciseCmd req CreditBorrowRequest_Settle with
+      marketCid = mc, poolCid = pc, loanAllocationCid = out, collateralArgs = noArgs, loanArgs = noArgs
+
+test_borrowIsAtomicAndPrivate : Script ()
+test_borrowIsAtomicAndPrivate = do
+  c <- crSetup
+  let r = c.ex.r
+  req <- borrowCn c 10000.0 1150.0 "b-1"
+  loan <- settleBorrow c req 1150.0 "b-1"
+  bobUsd <- balanceOf r.bob "USDx"
+  bobUsd === 1150.0
+  bobCc <- balanceOf r.bob "CCx"
+  bobCc === 0.0
+  (_, m) <- currentMarket c
+  (m.cash, m.principalOut) === (18850.0, 1150.0)
+  carolLoan <- queryContractId r.carol loan
+  aliceLoan <- queryContractId r.alice loan
+  assertMsg "nobody but the borrower and operator sees the loan" (isNone carolLoan && isNone aliceLoan)
+  bobLoan <- queryContractId r.bob loan
+  assertMsg "borrower sees the loan" (isSome bobLoan)
+
+test_borrowAboveLimitFails : Script ()
+test_borrowAboveLimitFails = do
+  c <- crSetup
+  req <- borrowCn c 10000.0 1250.0 "b-2"
+  out <- operatorAllocates c "USDx" c.ex.r.bob "b-2" 1250.0
+  (mc, _) <- currentMarket c
+  (pc, _) <- currentPool c
+  submitMustFail c.ex.r.venue do
+    exerciseCmd req CreditBorrowRequest_Settle with
+      marketCid = mc, poolCid = pc, loanAllocationCid = out, collateralArgs = noArgs, loanArgs = noArgs
+
+repayCn : Cr -> ContractId CreditLoan -> Decimal -> Text -> Script (ContractId CreditRepayRequest)
+repayCn c loan amount ref = do
+  let r = c.ex.r
+  now <- getTime
+  inputs <- map fst <$> holdingsOf r.bob "USDx"
+  submit r.bob do
+    createAndExerciseCmd
+      (CreditRepayOrder with
+        borrower = r.bob, operator = r.venue, loanCid = loan
+        factoryCid = toInterfaceContractId @AllocationFactory r.rules, expectedAdmin = r.admin
+        allocation = spec r now ref r.bob r.venue (usdx r.admin) amount
+        requestedAt = now, inputHoldingCids = inputs, extraArgs = noArgs)
+      CreditRepayOrder_Place
+
+test_repayReturnsCollateralAndLenderEarns : Script ()
+test_repayReturnsCollateralAndLenderEarns = do
+  c <- crSetup
+  let r = c.ex.r
+  loan <- borrowCn c 10000.0 1000.0 "b-3" >>= \req -> settleBorrow c req 1000.0 "b-3"
+  Some l <- queryContractId r.bob loan
+  passTime (hours 1)
+  let owed = 1000.0 + 1000.0 * l.aprBps / 10000.0
+  _ <- mintTo r "USDx" r.bob 100.0
+  rreq <- repayCn c loan owed "r-3"
+  back <- operatorAllocates c "CCx" r.bob "r-3" 10000.0
+  (mc, _) <- currentMarket c
+  closed <- submit r.venue do
+    exerciseCmd rreq CreditRepayRequest_Settle with
+      marketCid = mc, collateralAllocationCid = back, repayArgs = noArgs, collateralArgs = noArgs
+  Some cl <- queryContractId r.bob closed
+  (cl.paid, cl.liquidated) === (owed, False)
+  bobCc <- balanceOf r.bob "CCx"
+  bobCc === 10000.0
+  -- alice withdraws principal + interest
+  [(pos, p)] <- query @CreditPosition r.alice
+  (mc2, m2) <- currentMarket c
+  let value = p.shares * (m2.cash + m2.principalOut) / m2.totalShares
+  wreq <- submit r.alice do createCmd CreditWithdrawRequest with lender = r.alice, operator = r.venue, positionCid = pos
+  payout <- operatorAllocates c "USDx" r.alice "w-1" value
+  _ <- submit r.venue do
+    exerciseCmd wreq CreditWithdrawRequest_Settle with marketCid = mc2, payoutAllocationCid = payout, ref = "w-1", extraArgs = noArgs
+  aliceUsd <- balanceOf r.alice "USDx"
+  aliceUsd === 20000.0 + (owed - 1000.0)
+
+test_underpaymentIsRejected : Script ()
+test_underpaymentIsRejected = do
+  c <- crSetup
+  let r = c.ex.r
+  loan <- borrowCn c 10000.0 1000.0 "b-4" >>= \req -> settleBorrow c req 1000.0 "b-4"
+  passTime (hours 1)
+  rreq <- repayCn c loan 1000.0 "r-4"   -- principal only, no interest
+  back <- operatorAllocates c "CCx" r.bob "r-4" 10000.0
+  (mc, _) <- currentMarket c
+  submitMustFail r.venue do
+    exerciseCmd rreq CreditRepayRequest_Settle with
+      marketCid = mc, collateralAllocationCid = back, repayArgs = noArgs, collateralArgs = noArgs
+  submit r.venue do exerciseCmd rreq CreditRepayRequest_Reject with reason = "short", cancelArgs = noArgs
+  bobUsd <- balanceOf r.bob "USDx"
+  bobUsd === 1000.0
+
+test_healthyLoanCannotBeLiquidated : Script ()
+test_healthyLoanCannotBeLiquidated = do
+  c <- crSetup
+  loan <- borrowCn c 10000.0 1150.0 "b-5" >>= \req -> settleBorrow c req 1150.0 "b-5"
+  (mc, _) <- currentMarket c
+  (pc, _) <- currentPool c
+  submitMustFail c.ex.r.venue do exerciseCmd loan CreditLoan_Liquidate with marketCid = mc, poolCid = pc
+
+test_liquidationSellsCollateralIntoThePool : Script ()
+test_liquidationSellsCollateralIntoThePool = do
+  c <- crSetup
+  let r = c.ex.r
+  loan <- borrowCn c 10000.0 1150.0 "b-6" >>= \req -> settleBorrow c req 1150.0 "b-6"
+  -- carol dumps 30,000 CCx through the exchange; the price falls to ~0.078
+  _ <- mintTo r "CCx" r.carol 30000.0
+  (_, pool0) <- currentPool c
+  let q = getAmountOut 30.0 30000.0 pool0.reserveB pool0.reserveA
+  sreq <- placeSwap c.ex r.carol (ccx r.admin) 30000.0 0.0 "dump"
+  out <- allocateOutput c.ex r.carol (usdx r.admin) q "dump"
+  (pc, _) <- currentPool c
+  _ <- submit r.venue do
+    exerciseCmd sreq ExchangeSwapRequest_Settle with poolCid = pc, outputAllocationCid = out, inputExtraArgs = noArgs, outputExtraArgs = noArgs
+  (pc2, pool) <- currentPool c
+  let proceeds = getAmountOut 30.0 10000.0 pool.reserveB pool.reserveA
+  (mc, _) <- currentMarket c
+  closed <- submit r.venue do exerciseCmd loan CreditLoan_Liquidate with marketCid = mc, poolCid = pc2
+  Some cl <- queryContractId r.bob closed
+  cl.liquidated === True
+  (_, m) <- currentMarket c
+  m.principalOut === 0.0
+  m.badDebt === 1150.0 - proceeds
+  -- the collateral went into the pool's reserves
+  (_, poolAfter) <- currentPool c
+  poolAfter.reserveB === pool.reserveB + 10000.0

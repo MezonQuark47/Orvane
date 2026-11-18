@@ -168,7 +168,7 @@ function Narrative({ ctx }: { ctx: Ctx }) {
   )
 }
 
-function UtilRing({ util }: { util: number }) {
+export function UtilRing({ util }: { util: number }) {
   const r = 52
   const c = 2 * Math.PI * r
   return (

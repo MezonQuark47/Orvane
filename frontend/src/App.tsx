@@ -7,6 +7,7 @@ import Lens from './pages/Lens.tsx'
 import Liquidity from './pages/Liquidity.tsx'
 import Payments from './pages/Payments.tsx'
 import Lending from './pages/Lending.tsx'
+import LendingCn from './pages/LendingCn.tsx'
 import Trade from './pages/Trade.tsx'
 import ExchangeTrade from './pages/ExchangeTrade.tsx'
 
@@ -101,7 +102,7 @@ function Shell() {
               {tab === 'trade' && (config?.exchange ? <ExchangeTrade /> : <Trade />)}
               {tab === 'liquidity' && <Liquidity />}
               {tab === 'payments' && <Payments />}
-              {tab === 'lending' && <Lending />}
+              {tab === 'lending' && (config?.exchange?.creditMarketId ? <LendingCn /> : <Lending />)}
               {tab === 'lens' && <Lens />}
               {tab === 'holdings' && <Holdings />}
             </motion.div>
