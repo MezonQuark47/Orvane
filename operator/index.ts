@@ -15,6 +15,7 @@ import { JsonLedger, LedgerError, createdOf, type Contract } from '../shared/led
 import { T, dec, exercise, placeLiquidity, type Pool, type Token } from '../shared/amm.ts'
 import { P, issueInvoice, setPreference } from '../shared/payments.ts'
 import { bootstrapExchange, bootstrapPayroll, convertPayOnce, exchangeContext, fundTrader, settleExchangeOnce, EXCHANGE_POOL_ID, type ExchangeCtx } from './exchange.ts'
+import { bootstrapBilling, settleBillingOnce } from './billing.ts'
 import { bootstrapCredit, liquidateCreditOnce, settleCreditOnce, CREDIT_MARKET_ID } from './credit.ts'
 import { L, borrow, healthFactor, marketView, owedAt, supply, type LendingMarket, type Loan } from '../shared/lending.ts'
 
@@ -317,6 +318,16 @@ async function bootstrap(): Promise<Parties> {
       ],
     })
     await bootstrapCredit(exchange, { operator: p.operator, usdIssuer: p.usdIssuer, lender: p.alice, members: exchangeParties(p).traders })
+    await bootstrapBilling(exchange, {
+      operator: p.operator,
+      supplier: p.nova,
+      buyer: p.acme,
+      employees: [
+        { party: p.alice, limit: 1_500 },
+        { party: p.bob, limit: 1_250 },
+        { party: p.carol, limit: 2_100 },
+      ],
+    })
   }
   log('demo world ready')
   return p
@@ -430,6 +441,7 @@ async function settleLoop(p: Parties) {
         await settleExchangeOnce(exchange, p.operator)
         await settleCreditOnce(exchange, p.operator)
         await liquidateCreditOnce(exchange, p.operator)
+        await settleBillingOnce(exchange, p.operator)
       }
     } catch (err) {
       log('settle error', err instanceof Error ? err.message : err)

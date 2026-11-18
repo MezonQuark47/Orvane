@@ -24,6 +24,7 @@ import {
 import { L, payrollWithAdvances, type Advance, type AdvanceLine, type LendingMarket } from '../../../shared/lending.ts'
 import { useOrvane, type Config, type Persona } from '../ledger/OrvaneProvider.tsx'
 import { AuditorCn, EmployeePayCn, PayrollCnComposer } from './PayrollCn.tsx'
+import { InvoicesCnInbox, SupplierDeskCn } from './InvoicesCn.tsx'
 import { pick, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, TokenGlyph, fmt } from '../ui/bits.tsx'
 
@@ -112,7 +113,7 @@ export default function Payments() {
         <p className="lede">{lede}</p>
       </header>
       {role === 'acme' && <EmployerView data={data} config={config} />}
-      {role === 'nova' && <SupplierView data={data} config={config} />}
+      {role === 'nova' && (config.exchange ? <SupplierDeskCn /> : <SupplierView data={data} config={config} />)}
       {role === 'auditor' && (config.exchange ? <AuditorCn /> : <AuditorView data={data} />)}
       {role === 'employee' && (config.exchange ? <EmployeePayCn persona={persona} /> : <EmployeeView data={data} config={config} persona={persona} />)}
     </div>
@@ -129,7 +130,7 @@ function EmployerView({ data, config }: { data: PayData; config: Config }) {
     <div className="pay-grid">
       {config.exchange ? <PayrollCnComposer /> : <PayrollComposer data={data} config={config} />}
       <div className="pay-col">
-        <InvoicesInbox data={data} config={config} />
+        {config.exchange ? <InvoicesCnInbox /> : <InvoicesInbox data={data} config={config} />}
         {!config.exchange && <PayrollHistory data={data} />}
       </div>
     </div>

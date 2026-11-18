@@ -127,6 +127,16 @@ Operator                   ConvertTicket_Swap        (swaps the pay through the 
 The operator never sees a payroll line unless that employee asked for a conversion, and it can't
 sell more than the pay that was just received.
 
+### Invoices and wage advances on the token standard
+
+- **Invoices** (`Orvane.Billing`): visible to supplier and buyer only. Paying in the invoice currency
+  locks an allocation from buyer to supplier and settles it; nobody else is involved. Paying in
+  another asset locks it to the operator, who allocates exactly the invoiced amount from the
+  exchange pool to the supplier and settles both legs atomically. Disputes and reissues included.
+- **Wage advances** (`Orvane.Advances`): the employer backs a line per employee; the operator pays
+  the advance out of the credit market as an allocation. On payday the employer repays principal
+  and fee **in the same transaction that releases payroll**, and the employee is paid the net.
+
 ### Credit on the token standard
 
 Every movement of funds is an allocation, settled as one atomic DvP by the operator:
@@ -151,8 +161,8 @@ operator only; market choices never name a party.
 | `daml/orvane-lending` | Lending market (`LendingMarket`, `SupplyPosition`, `Loan`, borrow/supply orders) and wage advances (`AdvanceLine`, `Advance`, `PayrollWithAdvances`). Depends on both packages above |
 | `daml/orvane-registry` | CIP-56 token registry for Orvane test instruments (USDx): `OrvaneHolding`, `OrvaneRules` (TransferFactory, AllocationFactory), `OrvaneAllocation`. Built on the official Splice token standard interfaces vendored in `daml/dars` |
 | `daml/orvane-exchange` | Token-standard exchange: `ExchangePool`, `ExchangeSwapOrder` (allocate input + file request in one signature), `ExchangeSwapRequest` (atomic DvP settlement), `ExchangeReceipt` |
-| `daml/orvane-treasury` | Token-standard payroll: `PayeeConsent` (employee-signed delegation), `PayrollOrderCn` (lock every line as an allocation), `PayrollBatch` (atomic release), `PayslipCn`, `PayrollAttestationCn`, `ConvertTicket` (convert pay through the exchange) |
-| `daml/orvane-credit` | Token-standard credit: `CreditMarket`, supply / borrow / repay orders and requests (each one DvP), `CreditLoan` with on-ledger liquidation into the exchange pool, `CreditSurplus` |
+| `daml/orvane-treasury` | Token-standard payroll and invoices (`Orvane.Billing`): `PayeeConsent` (employee-signed delegation), `PayrollOrderCn` (lock every line as an allocation), `PayrollBatch` (atomic release), `PayslipCn`, `PayrollAttestationCn`, `ConvertTicket` (convert pay through the exchange) |
+| `daml/orvane-credit` | Token-standard credit and wage advances (`Orvane.Advances`): `CreditMarket`, supply / borrow / repay orders and requests (each one DvP), `CreditLoan` with on-ledger liquidation into the exchange pool, `CreditSurplus` |
 | `daml/orvane-amm-test` | Daml Script tests, kept in a separate package so test code is never uploaded to a validator |
 | `shared/` | TypeScript JSON Ledger API v2 client (with LocalNet dev JWT), contract types, command builders, pricing math, Scan / token-standard registry client (`amulet.ts`) and registry abstraction (`exchange.ts`). Used by both the operator and the web app |
 | `operator/` | Node service that uploads the contracts, bootstraps a demo world and settles requests (no dependencies, Node 22.18+) |
@@ -205,7 +215,7 @@ cd operator && npm run start:localnet
 cd frontend && npm run dev:localnet
 ```
 
-On the sandbox, the token-standard flows (exchange, payroll, credit) use a CIP-56 stand-in "CC"
+On the sandbox, the token-standard flows (exchange, payroll, invoices, advances, credit) use a CIP-56 stand-in "CC"
 issued by the Orvane registry instead of Canton Coin, so everything can be developed and tested
 without Docker. LocalNet runs the same contracts against real Canton Coin.
 
@@ -233,7 +243,7 @@ You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com) and Java 17 or ne
 ./scripts/test.sh
 ```
 
-All 57 scripts should pass.
+All 66 scripts should pass.
 
 | Test | Checks |
 |---|---|
@@ -267,6 +277,8 @@ All 57 scripts should pass.
 | `test_swapSettlesAtomically` … `test_orderMustPayTheOperator` | exchange: atomic two-leg settlement, no overpaying from reserves, slippage reject releases funds, mismatched allocations and orders rejected, outsiders see nothing |
 | `test_payrollLockAndRelease` … `test_cancelReturnsFunds` | token-standard payroll: lock and atomic release, per-employee privacy, auditor totals only, conversion through the exchange, operator cannot sell more than the pay, wrong consents rejected, cancel returns funds |
 | `test_borrowIsAtomicAndPrivate` … `test_liquidationSellsCollateralIntoThePool` | token-standard credit: atomic borrow, LTV limit, repay returns collateral and lender earns, underpayment rejected and refunded, healthy loans safe, liquidation through the pool with bad debt recorded |
+| `test_invoicePaidDirectly` … `test_disputeAndReissue` | token-standard invoices: direct payment invisible to others, cancel before settling, paying in CC while the supplier gets exact USDx, too-small conversion reopens the invoice, dispute and reissue |
+| `test_advanceDrawnAndRepaidByEmployer` … `test_repaymentMustCoverFee` | wage advances: drawn from the credit market, repaid by the employer with fee, limits, one open advance, repayment must cover the fee |
 
 ## Roadmap
 
@@ -275,7 +287,8 @@ All 57 scripts should pass.
 3. Operator service that settles requests through the Ledger API (done, local sandbox)
 4. LocalNet deployment (done), CIP-56 registry for USDx (done), USDx / Canton Coin exchange settling
    through token-standard allocations (done), payroll on allocations with real CC conversion (done),
-   credit with real CC collateral (done); next: invoices and wage advances on allocations, then DevNet
+   credit with real CC collateral (done), invoices and wage advances on allocations (done); next: a full
+   LocalNet pass with real Canton Coin, then DevNet
 5. Payments: private payroll and B2B invoices settled through the pool (done, local sandbox)
 6. Lending: collateralized loans with pool-priced liquidation and earned-wage advances (done, local sandbox)
 

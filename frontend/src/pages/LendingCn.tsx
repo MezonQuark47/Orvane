@@ -20,12 +20,14 @@ import {
   type CreditPosition,
 } from '../../../shared/credit.ts'
 import { healthFactor, liquidationPrice, owedAt } from '../../../shared/lending.ts'
+import { B, type AdvanceCn, type AdvanceLineCn } from '../../../shared/billing.ts'
+import AdvanceCardCn from './AdvanceCardCn.tsx'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
 import { pick, useNow, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, Tilt, TokenGlyph, fmt, fmtCompact } from '../ui/bits.tsx'
 import { HealthGauge, UtilRing } from './Lending.tsx'
 
-const TEMPLATES = [CR.CreditMarket, CR.CreditPosition, CR.CreditLoan, CR.CreditLoanClosed, CR.CreditBorrowRequest, CR.CreditRepayRequest, CR.CreditSupplyRequest, CR.CreditWithdrawRequest, X.ExchangePool] as const
+const TEMPLATES = [B.AdvanceLineCn, B.AdvanceCn, B.AdvanceRequestCn, CR.CreditMarket, CR.CreditPosition, CR.CreditLoan, CR.CreditLoanClosed, CR.CreditBorrowRequest, CR.CreditRepayRequest, CR.CreditSupplyRequest, CR.CreditWithdrawRequest, X.ExchangePool] as const
 const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
 const pct = (bps: number) => `${fmt(bps / 100, 2)}%`
 
@@ -82,6 +84,7 @@ export default function LendingCn() {
     pending: ['CreditBorrowRequest', 'CreditRepayRequest', 'CreditSupplyRequest', 'CreditWithdrawRequest'].reduce((n, k) => n + pick(rows, k).length, 0),
     balances,
   }
+  const advLine = pick<AdvanceLineCn>(rows, 'AdvanceLineCn').find((l) => l.payload.employee === party)
   const m = market?.payload
   const cash = m ? +m.cash : 0
   const out = m ? +m.principalOut : 0
@@ -152,6 +155,7 @@ export default function LendingCn() {
           </Panel>
         ) : (
           <>
+            {advLine && <AdvanceCardCn line={advLine} open={pick<AdvanceCn>(rows, 'AdvanceCn').find((a) => a.payload.employee === party)} pending={pick(rows, 'AdvanceRequestCn').length > 0} />}
             {(v.loans.length > 0 || v.closed.length > 0) && <LoansCn v={v} />}
             <BorrowCn v={v} />
             <SupplyCn v={v} />

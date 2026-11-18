@@ -5,7 +5,10 @@ import { useState } from 'react'
 import { amountOut } from '../../../shared/amm.ts'
 import { Scan, type InstrumentId } from '../../../shared/amulet.ts'
 import { createdOf, LedgerError, type Contract } from '../../../shared/ledger.ts'
-import { X, registries, sameInstrument, spendable, type ExchangePool } from '../../../shared/exchange.ts'
+import { X, allocationSpec, registries, sameInstrument, spendable, type ExchangePool } from '../../../shared/exchange.ts'
+import { ALLOCATION_FACTORY_V1, emptyExtraArgs } from '../../../shared/amulet.ts'
+import { B, repayAdvanceCn, type AdvanceCn, type AdvanceLineCn } from '../../../shared/billing.ts'
+import { CR, type CreditMarket } from '../../../shared/credit.ts'
 import {
   TR,
   consentCommand,
@@ -20,10 +23,12 @@ import { useOrvane, type Config, type Persona } from '../ledger/OrvaneProvider.t
 import { pick, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, TokenGlyph, fmt } from '../ui/bits.tsx'
 
-const TEMPLATES = [TR.PayeeConsent, TR.PayslipCn, TR.PayrollAttestationCn, TR.PayrollBatch, X.ExchangePool] as const
+const TEMPLATES = [TR.PayeeConsent, TR.PayslipCn, TR.PayrollAttestationCn, TR.PayrollBatch, X.ExchangePool, B.AdvanceCn, B.AdvanceLineCn, CR.CreditMarket] as const
 const label = (i: InstrumentId) => (i.id === 'Amulet' ? 'CC' : i.id)
 const glyph = (i: InstrumentId) => (i.id === 'USDx' ? 'USDx' : 'CCx')
 const DEFAULT_PAY: Record<string, number> = { Alice: 3000, Bob: 2500, Carol: 4200 }
+const exerciseResultOf = (tx: { events: unknown[] }, choice: string) =>
+  (tx.events as Array<Record<string, { choice?: string; exerciseResult?: unknown }>>).find((e) => e.ExercisedEvent?.choice === choice)?.ExercisedEvent?.exerciseResult
 const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
 const nameOf = (config: Config, party: string) => config.personas.find((p) => p.party === party)?.name ?? party.split('::')[0]
 
@@ -35,6 +40,9 @@ function useCnData() {
     attestations: pick<PayrollAttestationCn>(rows, 'PayrollAttestationCn').sort((a, b) => b.payload.runId.localeCompare(a.payload.runId)),
     batches: pick<PayrollBatch>(rows, 'PayrollBatch'),
     pool: pick<ExchangePool>(rows, 'ExchangePool')[0],
+    advances: pick<AdvanceCn>(rows, 'AdvanceCn'),
+    lines: pick<AdvanceLineCn>(rows, 'AdvanceLineCn'),
+    market: pick<CreditMarket>(rows, 'CreditMarket')[0],
   }
 }
 
@@ -56,7 +64,11 @@ export function PayrollCnComposer() {
 
   const pool = data.pool?.payload
   const rows = employees.map((e) => {
-    const amount = Number(amounts[e]) || 0
+    const gross = Number(amounts[e]) || 0
+    // open wage advances are repaid on payday, out of this pay
+    const advances = data.advances.filter((a) => a.payload.employee === e && a.payload.employer === party)
+    const deduction = advances.reduce((s, a) => s + +a.payload.principal + +a.payload.fee, 0)
+    const amount = Math.max(0, Math.round((gross - deduction) * 1e6) / 1e6)
     const consent = data.consents.find((c) => c.payload.employee === e)
     const receive = consent?.payload.receive ?? ex.usdx
     const wantsCC = sameInstrument(receive, ex.amulet)
@@ -66,9 +78,9 @@ export function PayrollCnComposer() {
       const [ri, ro] = inIsA ? [+pool.reserveA, +pool.reserveB] : [+pool.reserveB, +pool.reserveA]
       quote = amountOut(+pool.feeBps, amount, ri, ro)
     }
-    return { employee: e, name: nameOf(cfg, e), amount, consent, receive, wantsCC, quote }
+    return { employee: e, name: nameOf(cfg, e), gross, amount, deduction, advances, consent, receive, wantsCC, quote }
   })
-  const total = rows.reduce((s, r) => s + r.amount, 0)
+  const total = rows.reduce((s, r) => s + r.gross, 0)
   const missing = rows.filter((r) => r.amount > 0 && !r.consent)
 
   const run = async () => {
@@ -77,6 +89,37 @@ export function PayrollCnComposer() {
     setStep({ s: 'locking', runId })
     try {
       const reg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
+      const usdxReg = reg.forInstrument(ex.usdx, party)
+      // 1. lock each advance repayment (employer -> operator, executed by the employer on payday)
+      const repayments: Array<{ advanceCid: string; employee: string; allocationCid: string }> = []
+      for (const r of rows) {
+        for (const a of r.advances) {
+          const holdings = await spendable(ledger, party, ex.usdx)
+          const owed = +a.payload.principal + +a.payload.fee
+          const allocation = allocationSpec({ executor: party, ref: runId, sender: party, receiver: cfg.operator, instrument: ex.usdx, amount: owed, legId: `adv-${r.name}` })
+          const requestedAt = new Date(Date.now() - 5_000).toISOString()
+          const inputHoldingCids = holdings.map((h) => h.contractId)
+          const f = await usdxReg.allocationFactory({ expectedAdmin: ex.usdx.admin, allocation, requestedAt, inputHoldingCids, extraArgs: emptyExtraArgs })
+          const atx = await ledger.submit(
+            [party],
+            [
+              {
+                ExerciseCommand: {
+                  templateId: ALLOCATION_FACTORY_V1,
+                  contractId: f.factoryId,
+                  choice: 'AllocationFactory_Allocate',
+                  choiceArgument: { expectedAdmin: ex.usdx.admin, allocation, requestedAt, inputHoldingCids, extraArgs: f.extraArgs },
+                },
+              },
+            ],
+            [],
+            f.disclosed,
+          )
+          const res = exerciseResultOf(atx, 'AllocationFactory_Allocate') as { output: { value: { allocationCid: string } } }
+          repayments.push({ advanceCid: a.contractId, employee: r.employee, allocationCid: res.output.value.allocationCid })
+        }
+      }
+      // 2. lock the (net) payroll lines
       const treasury = await spendable(ledger, party, ex.usdx)
       const lines = rows.filter((r) => r.amount > 0).map((r) => ({ employee: r.employee, amount: r.amount }))
       const lock = await preparePayrollLock({
@@ -102,7 +145,18 @@ export function PayrollCnComposer() {
         batch: created.createArgument as PayrollBatch,
         consents: new Map(rows.filter((r) => r.consent).map((r) => [r.employee, r.consent!.contractId])),
       })
-      await ledger.submit([party], [release.command], [], release.disclosed)
+      // 3. payday: release payroll and repay advances in ONE transaction
+      const repayCtx = await Promise.all(repayments.map((x) => usdxReg.allocationArgs(x.allocationCid, 'execute-transfer')))
+      const repayCmds = repayments.map((x, i) =>
+        repayAdvanceCn(x.advanceCid, {
+          allocationCid: x.allocationCid,
+          marketCid: data.market!.contractId,
+          lineCid: data.lines.find((l) => l.payload.employee === x.employee)!.contractId,
+          extraArgs: repayCtx[i].extraArgs,
+          period,
+        }),
+      )
+      await ledger.submit([party], [release.command, ...repayCmds], [], [...release.disclosed, ...repayCtx.flatMap((c) => c.disclosed)])
       setStep({ s: 'done', runId })
     } catch (e) {
       setStep({ s: 'error', msg: errText(e) })
@@ -120,7 +174,8 @@ export function PayrollCnComposer() {
         <input className="period mono" value={period} onChange={(e) => setPeriod(e.target.value)} aria-label="Pay period" />
       </header>
       <p className="muted small cip">
-        <span className="badge">CIP-56</span> Paid in Orvane USDx through token-standard allocations. CC lines convert through the real Canton Coin pool.
+        <span className="badge">CIP-56</span> Paid in Orvane USDx through token-standard allocations. CC lines convert through the{' '}
+        {ex.realAmulet ? 'real Canton Coin pool' : 'USDx / CC pool'}. Open wage advances are repaid in the same payday transaction.
       </p>
       <div className="pay-table" role="table">
         <div className="pay-row head" role="row">
@@ -148,6 +203,7 @@ export function PayrollCnComposer() {
             <span className="mono quote">
               {r.wantsCC ? '≈ ' : ''}
               {fmt(r.quote, r.wantsCC ? 0 : 2)} {label(r.receive)}
+              {r.deduction > 0 && <span className="deduct">−{fmt(r.deduction)} advance repaid</span>}
             </span>
           </motion.div>
         ))}

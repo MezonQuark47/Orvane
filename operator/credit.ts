@@ -40,7 +40,7 @@ export async function findCreditMarket(ctx: ExchangeCtx, operator: string) {
 }
 
 // Allocate from the operator's holdings to `receiver` for settlement `ref`.
-async function allocateFromOperator(ctx: ExchangeCtx, operator: string, instrument: InstrumentId, receiver: string, amount: number, ref: string) {
+export async function allocateFromOperator(ctx: ExchangeCtx, operator: string, instrument: InstrumentId, receiver: string, amount: number, ref: string) {
   const ledger = ctx.ledger()
   const reg = ctx.reg.forInstrument(instrument, operator)
   const reserves = await spendable(ledger, operator, instrument)
@@ -59,7 +59,7 @@ async function allocateFromOperator(ctx: ExchangeCtx, operator: string, instrume
   return res.output.value.allocationCid
 }
 
-async function withdrawAllocation(ctx: ExchangeCtx, operator: string, instrument: InstrumentId, cid: string) {
+export async function withdrawAllocation(ctx: ExchangeCtx, operator: string, instrument: InstrumentId, cid: string) {
   try {
     const w = await ctx.reg.forInstrument(instrument, operator).allocationArgs(cid, 'withdraw')
     await ctx.ledger().submit([operator], [{ ExerciseCommand: { templateId: ALLOCATION_V1, contractId: cid, choice: 'Allocation_Withdraw', choiceArgument: { extraArgs: w.extraArgs } } }], [], w.disclosed)

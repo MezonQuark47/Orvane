@@ -1,0 +1,116 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+module Test.AdvancesTest where
+
+import DA.Assert
+import DA.Optional (isNone)
+import Daml.Script
+
+import Splice.Api.Token.AllocationV1
+
+import Orvane.Advances
+import Orvane.Credit
+import Orvane.Registry
+import Test.CreditTest (Cr(..), crSetup, currentMarket)
+import Test.ExchangeTest
+import Test.RegistryTest
+
+data Adv = Adv with
+    c : Cr
+    acme : Party
+    line : ContractId AdvanceLineCn
+
+-- Credit market from CreditTest (Alice supplied 20,000 USDx). Acme employs
+-- Bob and backs advances up to 1,250 USDx at a 1% fee.
+advSetup : Script Adv
+advSetup = do
+  c0 <- crSetup
+  let r0 = c0.ex.r
+  acme <- allocateParty "Acme"
+  rules <- submit r0.admin do
+    exerciseCmd r0.rules OrvaneRules_SetUsers with newUsers = [r0.alice, r0.bob, r0.carol, r0.venue, acme]
+  _ <- submit r0.admin do exerciseCmd rules OrvaneRules_Mint with instrument = "USDx", owner = acme, amount = 10000.0
+  let c = c0 with ex = c0.ex with r = r0 with rules
+  -- the employer is a market member: it repays advances into the market
+  (mc, _) <- currentMarket c
+  _ <- submit r0.venue do exerciseCmd mc Credit_SetMembers with newMembers = [r0.alice, r0.bob, r0.carol, acme]
+  line <- submit acme do
+    createCmd AdvanceLineCn with
+      employer = acme, employee = r0.bob, operator = r0.venue, marketId = "USDx-credit"
+      limit = 1250.0, feeBps = 100.0, drawn = 0.0
+  pure Adv with ..
+
+draw : Adv -> ContractId AdvanceLineCn -> Decimal -> Text -> Script (ContractId AdvanceCn)
+draw a line amount ref = do
+  let r = a.c.ex.r
+  req <- submit r.bob do createCmd AdvanceRequestCn with employee = r.bob, operator = r.venue, lineCid = line, amount
+  now <- getTime
+  inputs <- map fst <$> holdingsOf r.venue "USDx"
+  payout <- allocate r (mkSettlement r now ref) "adv" r.venue r.bob (usdx r.admin) amount inputs
+  (mc, _) <- currentMarket a.c
+  submit r.venue do exerciseCmd req AdvanceRequestCn_Settle with marketCid = mc, payoutAllocationCid = payout, extraArgs = noArgs
+
+test_advanceDrawnAndRepaidByEmployer : Script ()
+test_advanceDrawnAndRepaidByEmployer = do
+  a <- advSetup
+  let r = a.c.ex.r
+  adv <- draw a a.line 800.0 "adv-1"
+  bobUsd <- balanceOf r.bob "USDx"
+  bobUsd === 800.0
+  (_, m1) <- currentMarket a.c
+  (m1.cash, m1.principalOut) === (19200.0, 800.0)
+  -- the employer sees the advance; colleagues and the lender don't
+  Some _ <- queryContractId a.acme adv
+  aliceSees <- queryContractId r.alice adv
+  carolSees <- queryContractId r.carol adv
+  assertMsg "nobody else sees the advance" (isNone aliceSees && isNone carolSees)
+
+  -- payday: the employer repays principal + 1% fee to the market
+  now <- getTime
+  inputs <- map fst <$> holdingsOf a.acme "USDx"
+  repay <- allocate r ((mkSettlement r now "pay-1") with executor = a.acme) "adv" a.acme r.venue (usdx r.admin) 808.0 inputs
+  [(lineNow, _)] <- query @AdvanceLineCn a.acme
+  (mc, _) <- currentMarket a.c
+  _ <- submit a.acme do
+    exerciseCmd adv AdvanceCn_Repay with allocationCid = repay, marketCid = mc, lineCid = lineNow, extraArgs = noArgs, period = "November 2026"
+  (_, m2) <- currentMarket a.c
+  (m2.cash, m2.principalOut) === (20008.0, 0.0)
+  [(_, l)] <- query @AdvanceLineCn a.acme
+  l.drawn === 0.0
+  acmeUsd <- balanceOf a.acme "USDx"
+  acmeUsd === 10000.0 - 808.0
+
+test_advanceLimits : Script ()
+test_advanceLimits = do
+  a <- advSetup
+  let r = a.c.ex.r
+  -- above the limit
+  req <- submit r.bob do createCmd AdvanceRequestCn with employee = r.bob, operator = r.venue, lineCid = a.line, amount = 1300.0
+  now <- getTime
+  inputs <- map fst <$> holdingsOf r.venue "USDx"
+  payout <- allocate r (mkSettlement r now "x") "adv" r.venue r.bob (usdx r.admin) 1300.0 inputs
+  (mc, _) <- currentMarket a.c
+  submitMustFail r.venue do exerciseCmd req AdvanceRequestCn_Settle with marketCid = mc, payoutAllocationCid = payout, extraArgs = noArgs
+  -- one open advance at a time
+  _ <- draw a a.line 500.0 "adv-2"
+  [(lineNow, _)] <- query @AdvanceLineCn a.acme
+  req2 <- submit r.bob do createCmd AdvanceRequestCn with employee = r.bob, operator = r.venue, lineCid = lineNow, amount = 100.0
+  now2 <- getTime
+  inputs2 <- map fst <$> holdingsOf r.venue "USDx"
+  payout2 <- allocate r (mkSettlement r now2 "y") "adv" r.venue r.bob (usdx r.admin) 100.0 inputs2
+  (mc2, _) <- currentMarket a.c
+  submitMustFail r.venue do exerciseCmd req2 AdvanceRequestCn_Settle with marketCid = mc2, payoutAllocationCid = payout2, extraArgs = noArgs
+
+test_repaymentMustCoverFee : Script ()
+test_repaymentMustCoverFee = do
+  a <- advSetup
+  let r = a.c.ex.r
+  adv <- draw a a.line 800.0 "adv-3"
+  now <- getTime
+  inputs <- map fst <$> holdingsOf a.acme "USDx"
+  short <- allocate r ((mkSettlement r now "pay-3") with executor = a.acme) "adv" a.acme r.venue (usdx r.admin) 800.0 inputs
+  [(lineNow, _)] <- query @AdvanceLineCn a.acme
+  (mc, _) <- currentMarket a.c
+  submitMustFail a.acme do
+    exerciseCmd adv AdvanceCn_Repay with allocationCid = short, marketCid = mc, lineCid = lineNow, extraArgs = noArgs, period = "x"

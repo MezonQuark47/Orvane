@@ -1,0 +1,210 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Private B2B invoices on the Canton Network Token Standard.
+--
+-- An invoice is visible to supplier and buyer only.
+--   * Same currency: the buyer locks the amount as an allocation to the
+--     supplier (executor: buyer) and settles it. Nobody else is involved.
+--   * Another currency: the buyer locks e.g. CC to the Orvane operator; the
+--     operator allocates exactly the invoiced USDx from the exchange pool to
+--     the supplier and settles both legs plus the pool booking atomically.
+--     The operator only ever learns about invoices paid this way.
+module Orvane.Billing where
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1 (InstrumentId(..), Holding)
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+
+import Orvane.Exchange (ExchangePool(..), ExchangePool_Swap(..), counterpart)
+
+data BillTerms = BillTerms
+  with
+    invoiceNo  : Text
+    memo       : Text
+    amount     : Decimal
+    instrument : InstrumentId
+    dueDate    : Date
+  deriving (Eq, Show)
+
+allocateVia : ContractId AllocationFactory -> Party -> AllocationSpecification -> Time -> [ContractId Holding] -> ExtraArgs -> Update (ContractId Allocation)
+allocateVia factoryCid expectedAdmin allocation requestedAt inputHoldingCids extraArgs = do
+  res <- exercise factoryCid AllocationFactory_Allocate with expectedAdmin, allocation, requestedAt, inputHoldingCids, extraArgs
+  case res.output of
+    AllocationInstructionResult_Completed c -> pure c
+    _ -> abort "the registry did not complete the allocation immediately"
+
+template InvoiceCn
+  with
+    supplier : Party
+    buyer    : Party
+    terms    : BillTerms
+  where
+    signatory supplier
+    observer buyer
+    ensure terms.amount > 0.0 && terms.invoiceNo /= ""
+
+    -- | Lock the invoiced amount for the supplier. Settled by InvoicePaymentCn_Settle.
+    choice InvoiceCn_Lock : ContractId InvoicePaymentCn
+      with
+        factoryCid       : ContractId AllocationFactory
+        allocation       : AllocationSpecification
+        requestedAt      : Time
+        inputHoldingCids : [ContractId Holding]
+        extraArgs        : ExtraArgs
+      controller buyer
+      do
+        let leg = allocation.transferLeg
+        assertMsg "allocation must pay this invoice to the supplier"
+          (leg.sender == buyer && leg.receiver == supplier && allocation.settlement.executor == buyer
+            && leg.instrumentId == terms.instrument && leg.amount == terms.amount)
+        alloc <- allocateVia factoryCid terms.instrument.admin allocation requestedAt inputHoldingCids extraArgs
+        create InvoicePaymentCn with supplier, buyer, terms, allocationCid = alloc
+
+    -- | Pay in another asset through the Orvane exchange.
+    choice InvoiceCn_PayConverted : ContractId InvoiceConversionCn
+      with
+        operator         : Party
+        poolId           : Text
+        factoryCid       : ContractId AllocationFactory
+        expectedAdmin    : Party
+        allocation       : AllocationSpecification
+        requestedAt      : Time
+        inputHoldingCids : [ContractId Holding]
+        extraArgs        : ExtraArgs
+      controller buyer
+      do
+        let leg = allocation.transferLeg
+        assertMsg "input must go from the buyer to the operator"
+          (leg.sender == buyer && leg.receiver == operator && allocation.settlement.executor == operator)
+        assertMsg "pay converted only from another asset" (leg.instrumentId /= terms.instrument)
+        alloc <- allocateVia factoryCid expectedAdmin allocation requestedAt inputHoldingCids extraArgs
+        create InvoiceConversionCn with
+          supplier, buyer, operator, poolId, terms
+          inputAllocationCid = alloc, inputInstrument = leg.instrumentId, amountIn = leg.amount
+          ref = allocation.settlement.settlementRef.id
+
+    choice InvoiceCn_Dispute : ContractId DisputedInvoiceCn
+      with
+        reason : Text
+      controller buyer
+      do create DisputedInvoiceCn with supplier, buyer, terms, reason
+
+    choice InvoiceCn_Withdraw : ()
+      controller supplier
+      do pure ()
+
+-- | Funds locked for the supplier, waiting for the buyer to settle.
+template InvoicePaymentCn
+  with
+    supplier      : Party
+    buyer         : Party
+    terms         : BillTerms
+    allocationCid : ContractId Allocation
+  where
+    signatory supplier, buyer
+
+    choice InvoicePaymentCn_Settle : ContractId PaidInvoiceCn
+      with
+        extraArgs : ExtraArgs
+      controller buyer
+      do
+        _ <- exercise allocationCid Allocation_ExecuteTransfer with extraArgs
+        now <- getTime
+        create PaidInvoiceCn with
+          supplier, buyer, terms, paidInstrument = terms.instrument, paidAmount = terms.amount, converted = False, paidAt = now
+
+    -- | Changed their mind before settling: funds back, invoice open again.
+    choice InvoicePaymentCn_Cancel : ContractId InvoiceCn
+      with
+        extraArgs : ExtraArgs
+      controller buyer
+      do
+        _ <- exercise allocationCid Allocation_Withdraw with extraArgs
+        create InvoiceCn with supplier, buyer, terms
+
+-- | A cross-asset payment waiting for the operator.
+template InvoiceConversionCn
+  with
+    supplier           : Party
+    buyer              : Party
+    operator           : Party
+    poolId             : Text
+    terms              : BillTerms
+    inputAllocationCid : ContractId Allocation
+    inputInstrument    : InstrumentId
+    amountIn           : Decimal
+    ref                : Text
+  where
+    signatory supplier, buyer
+    observer operator
+
+    -- | Buyer's asset into the pool, exactly the invoiced amount to the supplier.
+    -- Anything the buyer locked above the conversion cost stays in the pool.
+    choice InvoiceConversionCn_Settle : ContractId PaidInvoiceCn
+      with
+        poolCid             : ContractId ExchangePool
+        outputAllocationCid : ContractId Allocation
+        inputExtraArgs      : ExtraArgs
+        outputExtraArgs     : ExtraArgs
+      controller operator
+      do
+        pool <- fetch poolCid
+        assertMsg "wrong pool" (pool.poolId == poolId && pool.operator == operator)
+        assertMsg "pool does not pay out the invoice currency" (counterpart pool inputInstrument == terms.instrument)
+        inV <- view <$> fetch inputAllocationCid
+        let inLeg = inV.allocation.transferLeg
+        assertMsg "input allocation does not match"
+          (inLeg.sender == buyer && inLeg.receiver == operator && inLeg.instrumentId == inputInstrument
+            && inLeg.amount == amountIn && inV.allocation.settlement.settlementRef.id == ref)
+        outV <- view <$> fetch outputAllocationCid
+        let outLeg = outV.allocation.transferLeg
+        assertMsg "output must pay exactly the invoice to the supplier"
+          (outLeg.sender == operator && outLeg.receiver == supplier && outLeg.instrumentId == terms.instrument
+            && outLeg.amount == terms.amount && outV.allocation.settlement.executor == operator
+            && outV.allocation.settlement.settlementRef.id == ref)
+        _ <- exercise poolCid ExchangePool_Swap with
+          inInstrument = inputInstrument, amountIn, amountOut = terms.amount, minOut = terms.amount
+        _ <- exercise inputAllocationCid Allocation_ExecuteTransfer with extraArgs = inputExtraArgs
+        _ <- exercise outputAllocationCid Allocation_ExecuteTransfer with extraArgs = outputExtraArgs
+        now <- getTime
+        create PaidInvoiceCn with
+          supplier, buyer, terms, paidInstrument = inputInstrument, paidAmount = amountIn, converted = True, paidAt = now
+
+    -- | Can't be filled: release the buyer's funds and reopen the invoice.
+    choice InvoiceConversionCn_Reject : ContractId InvoiceCn
+      with
+        reason     : Text
+        cancelArgs : ExtraArgs
+      controller operator
+      do
+        _ <- exercise inputAllocationCid Allocation_Cancel with extraArgs = cancelArgs
+        create InvoiceCn with supplier, buyer, terms
+
+template PaidInvoiceCn
+  with
+    supplier       : Party
+    buyer          : Party
+    terms          : BillTerms
+    paidInstrument : InstrumentId
+    paidAmount     : Decimal
+    converted      : Bool
+    paidAt         : Time
+  where
+    signatory supplier, buyer
+
+template DisputedInvoiceCn
+  with
+    supplier : Party
+    buyer    : Party
+    terms    : BillTerms
+    reason   : Text
+  where
+    signatory supplier, buyer
+
+    choice DisputedInvoiceCn_Reissue : ContractId InvoiceCn
+      with
+        newTerms : BillTerms
+      controller supplier
+      do create InvoiceCn with supplier, buyer, terms = newTerms
