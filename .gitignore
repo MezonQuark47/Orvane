@@ -1,0 +1,22 @@
+# Daml build output
+.daml/
+*.dar
+!dars/*.dar
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.log
+
+# Env & secrets (never commit keys or party tokens)
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

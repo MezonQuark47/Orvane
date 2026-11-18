@@ -1,0 +1,49 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Pure pricing math for the constant-product AMM. Kept separate so the
+-- frontend can mirror it 1:1 and tests can target it directly.
+module Orvane.Math where
+
+-- | Basis-point denominator (100% = 10000 bps).
+bpsDenominator : Decimal
+bpsDenominator = 10000.0
+
+-- | Square root via Newton's method (Decimal has no built-in sqrt).
+sqrtDecimal : Decimal -> Decimal
+sqrtDecimal x
+  | x <= 0.0 = 0.0
+  | otherwise = newtonSqrt x (if x > 1.0 then x / 2.0 else 1.0) 0
+
+-- Recursion must be top-level in Daml.
+newtonSqrt : Decimal -> Decimal -> Int -> Decimal
+newtonSqrt x guess n
+  | n >= 200 = guess
+  | otherwise =
+      let next = (guess + x / guess) / 2.0
+      in if abs (next - guess) <= 0.0000000001 then next else newtonSqrt x next (n + 1)
+
+-- | Uniswap-v2 style output amount for an exact input, after the LP fee.
+--   out = (in * (1 - fee) * reserveOut) / (reserveIn + in * (1 - fee))
+getAmountOut : Decimal -> Decimal -> Decimal -> Decimal -> Decimal
+getAmountOut feeBps amountIn reserveIn reserveOut =
+  let inWithFee = amountIn * (bpsDenominator - feeBps) / bpsDenominator
+  in inWithFee * reserveOut / (reserveIn + inWithFee)
+
+-- | LP shares minted for a deposit of (amountA, amountB).
+-- First deposit: sqrt(a * b). Later: proportional to the smaller side.
+sharesForDeposit : Decimal -> Decimal -> Decimal -> Decimal -> Decimal -> Decimal
+sharesForDeposit totalShares reserveA reserveB amountA amountB
+  | totalShares == 0.0 = sqrtDecimal (amountA * amountB)
+  | otherwise = min (amountA * totalShares / reserveA) (amountB * totalShares / reserveB)
+
+-- | Given a desired deposit, the amounts actually used so the pool ratio is kept.
+-- The caller refunds the difference.
+optimalDeposit : Decimal -> Decimal -> Decimal -> Decimal -> (Decimal, Decimal)
+optimalDeposit reserveA reserveB desiredA desiredB
+  | reserveA == 0.0 || reserveB == 0.0 = (desiredA, desiredB)
+  | otherwise =
+      let bOptimal = desiredA * reserveB / reserveA
+      in if bOptimal <= desiredB
+           then (desiredA, bOptimal)
+           else (desiredB * reserveA / reserveB, desiredB)

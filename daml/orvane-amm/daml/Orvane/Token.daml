@@ -1,0 +1,74 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | A minimal, issuer-backed fungible holding.
+--
+-- Privacy model: a token is visible only to its issuer, its owner and any
+-- parties the owner explicitly discloses it to (e.g. a pool operator that
+-- will settle a trade on the owner's behalf). Moving a token clears the
+-- disclosure list, so a counterparty never keeps visibility afterwards.
+module Orvane.Token where
+
+template Token
+  with
+    issuer    : Party
+    owner     : Party
+    symbol    : Text
+    amount    : Decimal
+    observers : [Party]
+  where
+    signatory issuer
+    observer owner :: observers
+    ensure amount > 0.0 && symbol /= ""
+
+    -- | Move the whole holding to a new owner. Disclosures are dropped.
+    choice Transfer : ContractId Token
+      with
+        newOwner : Party
+      controller owner
+      do create this with owner = newOwner, observers = []
+
+    -- | Split into (splitAmount, remainder).
+    choice Split : (ContractId Token, ContractId Token)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "split amount must be > 0 and < amount"
+          (splitAmount > 0.0 && splitAmount < amount)
+        taken <- create this with amount = splitAmount
+        rest  <- create this with amount = amount - splitAmount
+        pure (taken, rest)
+
+    -- | Merge another holding of the same issuer, owner and symbol into this one.
+    choice Merge : ContractId Token
+      with
+        otherCid : ContractId Token
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "can only merge identical issuer, owner and symbol"
+          (other.issuer == issuer && other.owner == owner && other.symbol == symbol)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+    -- | Let another party (typically a settlement operator) see this holding.
+    choice Disclose : ContractId Token
+      with
+        party : Party
+      controller owner
+      do create this with observers = party :: filter (/= party) observers
+
+-- | Take exactly `amt` out of a holding of `total`.
+-- Returns the exact piece and the remainder, if any.
+takeExact : ContractId Token -> Decimal -> Decimal -> Update (ContractId Token, Optional (ContractId Token))
+takeExact cid total amt
+  | amt == total = pure (cid, None)
+  | otherwise = do
+      (taken, rest) <- exercise cid Split with splitAmount = amt
+      pure (taken, Some rest)
+
+-- | Merge an incoming holding into an optional existing one.
+mergeInto : Optional (ContractId Token) -> ContractId Token -> Update (ContractId Token)
+mergeInto None incoming = pure incoming
+mergeInto (Some existing) incoming = exercise existing Merge with otherCid = incoming

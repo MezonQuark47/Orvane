@@ -1,0 +1,3 @@
+packages:
+  - ./orvane-amm
+  - ./orvane-amm-test

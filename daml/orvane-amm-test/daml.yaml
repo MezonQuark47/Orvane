@@ -1,0 +1,10 @@
+sdk-version: 3.7.3
+name: orvane-defi-amm-test
+source: daml
+version: 0.1.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+data-dependencies:
+  - ../orvane-amm/.daml/dist/orvane-defi-amm-0.1.0.dar

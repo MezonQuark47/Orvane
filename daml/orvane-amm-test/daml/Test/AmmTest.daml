@@ -1,0 +1,197 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+module Test.AmmTest where
+
+import DA.Assert
+import DA.Optional (isNone, isSome)
+import Daml.Script
+
+import Orvane.Amm
+import Orvane.Math
+import Orvane.Token
+
+data World = World with
+    operator : Party
+    usdIssuer : Party
+    ccIssuer : Party
+    alice : Party   -- liquidity provider
+    bob : Party     -- trader
+    carol : Party   -- another pool member (should learn nothing about bob)
+    poolCid : ContractId Pool
+
+mint : Party -> Party -> Text -> Decimal -> Script (ContractId Token)
+mint issuer owner symbol amount =
+  submit issuer do createCmd Token with issuer, owner, symbol, amount, observers = []
+
+discloseTo : Party -> ContractId Token -> Party -> Script (ContractId Token)
+discloseTo owner cid party = submit owner do exerciseCmd cid Disclose with party
+
+-- | Two issuers, an operator, an empty USDx/CCx pool with 0.30% fee.
+setup : Script World
+setup = do
+  operator  <- allocateParty "Operator"
+  usdIssuer <- allocateParty "UsdIssuer"
+  ccIssuer  <- allocateParty "CcIssuer"
+  alice     <- allocateParty "Alice"
+  bob       <- allocateParty "Bob"
+  carol     <- allocateParty "Carol"
+  poolCid <- submit operator do
+    createCmd Pool with
+      operator, poolId = "USDx-CCx"
+      issuerA = usdIssuer, symbolA = "USDx"
+      issuerB = ccIssuer,  symbolB = "CCx"
+      reserveA = 0.0, reserveB = 0.0
+      holdingA = None, holdingB = None
+      totalShares = 0.0, feeBps = 30.0
+      members = [alice, bob, carol]
+  pure World with ..
+
+-- | Alice seeds 10,000 USDx + 50,000 CCx (price 0.20 USDx per CCx).
+seedLiquidity : World -> Script (World, ContractId LpShare)
+seedLiquidity w = do
+  usd <- mint w.usdIssuer w.alice "USDx" 10000.0
+  cc  <- mint w.ccIssuer  w.alice "CCx"  50000.0
+  usd' <- discloseTo w.alice usd w.operator
+  cc'  <- discloseTo w.alice cc  w.operator
+  req <- submit w.alice do
+    createCmd AddLiquidityRequest with
+      provider = w.alice, operator = w.operator, poolId = "USDx-CCx"
+      cidA = usd', cidB = cc', minShares = 0.0
+  (pool', lp) <- submit w.operator do
+    exerciseCmd req AddLiquidityRequest_Execute with poolCid = w.poolCid
+  let w' = w with poolCid = pool'
+  pure (w', lp)
+
+test_math : Script ()
+test_math = do
+  let s = sqrtDecimal 500000000.0
+  assertMsg "sqrt precision" (abs (s * s - 500000000.0) < 0.001)
+  -- no fee: 100 in on 1000/1000 -> 1000*100/1100
+  getAmountOut 0.0 100.0 1000.0 1000.0 === 1000.0 * 100.0 / 1100.0
+  optimalDeposit 100.0 200.0 10.0 50.0 === (10.0, 20.0)
+  optimalDeposit 100.0 200.0 10.0 10.0 === (5.0, 10.0)
+
+test_addLiquidity : Script ()
+test_addLiquidity = do
+  w <- setup
+  (w, lp) <- seedLiquidity w
+  Some pool <- queryContractId w.operator w.poolCid
+  pool.reserveA === 10000.0
+  pool.reserveB === 50000.0
+  Some share <- queryContractId w.alice lp
+  share.shares === pool.totalShares
+  -- second deposit with an off-ratio amount gets the excess refunded
+  usd <- mint w.usdIssuer w.bob "USDx" 1000.0
+  cc  <- mint w.ccIssuer  w.bob "CCx"  9000.0
+  usd' <- discloseTo w.bob usd w.operator
+  cc'  <- discloseTo w.bob cc  w.operator
+  req <- submit w.bob do
+    createCmd AddLiquidityRequest with
+      provider = w.bob, operator = w.operator, poolId = "USDx-CCx"
+      cidA = usd', cidB = cc', minShares = 0.0
+  (poolCid2, _) <- submit w.operator do
+    exerciseCmd req AddLiquidityRequest_Execute with poolCid = w.poolCid
+  Some pool2 <- queryContractId w.operator poolCid2
+  pool2.reserveA === 11000.0
+  pool2.reserveB === 55000.0
+  bobTokens <- query @Token w.bob
+  let refundCc = sum [t.amount | (_, t) <- bobTokens, t.owner == w.bob, t.symbol == "CCx"]
+  refundCc === 4000.0
+
+test_swap : Script ()
+test_swap = do
+  w <- setup
+  (w, _) <- seedLiquidity w
+  usd <- mint w.usdIssuer w.bob "USDx" 100.0
+  usd' <- discloseTo w.bob usd w.operator
+  let expected = getAmountOut 30.0 100.0 10000.0 50000.0
+  req <- submit w.bob do
+    createCmd SwapRequest with
+      trader = w.bob, operator = w.operator, poolId = "USDx-CCx"
+      inputCid = usd', minOutput = expected
+  (pool', out, receipt) <- submit w.operator do
+    exerciseCmd req SwapRequest_Execute with poolCid = w.poolCid
+  Some outTok <- queryContractId w.bob out
+  outTok.owner === w.bob
+  outTok.symbol === "CCx"
+  outTok.amount === expected
+  Some pool <- queryContractId w.carol pool'
+  pool.reserveA === 10100.0
+  pool.reserveB === 50000.0 - expected
+  -- constant product never decreases (fees accrue to LPs)
+  assertMsg "k must not decrease" (pool.reserveA * pool.reserveB >= 10000.0 * 50000.0)
+  -- privacy: carol sees the new price but not bob's tokens, request or receipt
+  carolSeesOut <- queryContractId w.carol out
+  carolSeesReceipt <- queryContractId w.carol receipt
+  assertMsg "carol must not see bob's output" (isNone carolSeesOut)
+  assertMsg "carol must not see bob's receipt" (isNone carolSeesReceipt)
+  bobSeesReceipt <- queryContractId w.bob receipt
+  assertMsg "bob sees his receipt" (isSome bobSeesReceipt)
+
+test_slippageProtection : Script ()
+test_slippageProtection = do
+  w <- setup
+  (w, _) <- seedLiquidity w
+  usd <- mint w.usdIssuer w.bob "USDx" 100.0
+  usd' <- discloseTo w.bob usd w.operator
+  let expected = getAmountOut 30.0 100.0 10000.0 50000.0
+  req <- submit w.bob do
+    createCmd SwapRequest with
+      trader = w.bob, operator = w.operator, poolId = "USDx-CCx"
+      inputCid = usd', minOutput = expected + 1.0
+  submitMustFail w.operator do
+    exerciseCmd req SwapRequest_Execute with poolCid = w.poolCid
+  -- bob still holds his USDx
+  Some stillMine <- queryContractId w.bob usd'
+  stillMine.owner === w.bob
+
+test_foreignTokenRejected : Script ()
+test_foreignTokenRejected = do
+  w <- setup
+  (w, _) <- seedLiquidity w
+  fakeIssuer <- allocateParty "FakeIssuer"
+  fake <- mint fakeIssuer w.bob "USDx" 100.0
+  fake' <- discloseTo w.bob fake w.operator
+  req <- submit w.bob do
+    createCmd SwapRequest with
+      trader = w.bob, operator = w.operator, poolId = "USDx-CCx"
+      inputCid = fake', minOutput = 0.0
+  submitMustFail w.operator do
+    exerciseCmd req SwapRequest_Execute with poolCid = w.poolCid
+
+test_operatorCannotStealWithoutRequest : Script ()
+test_operatorCannotStealWithoutRequest = do
+  w <- setup
+  usd <- mint w.usdIssuer w.bob "USDx" 100.0
+  usd' <- discloseTo w.bob usd w.operator
+  -- disclosure gives visibility, not authority
+  submitMustFail w.operator do
+    exerciseCmd usd' Transfer with newOwner = w.operator
+
+test_removeLiquidity : Script ()
+test_removeLiquidity = do
+  w <- setup
+  (w, lp) <- seedLiquidity w
+  -- a trade happens, then alice exits with her share of reserves + fees
+  usd <- mint w.usdIssuer w.bob "USDx" 1000.0
+  usd' <- discloseTo w.bob usd w.operator
+  req <- submit w.bob do
+    createCmd SwapRequest with
+      trader = w.bob, operator = w.operator, poolId = "USDx-CCx"
+      inputCid = usd', minOutput = 0.0
+  (poolCid, _, _) <- submit w.operator do
+    exerciseCmd req SwapRequest_Execute with poolCid = w.poolCid
+  Some before <- queryContractId w.operator poolCid
+  wreq <- submit w.alice do
+    createCmd RemoveLiquidityRequest with
+      provider = w.alice, operator = w.operator, lpCid = lp, minA = 0.0, minB = 0.0
+  (poolCid', a, b) <- submit w.operator do
+    exerciseCmd wreq RemoveLiquidityRequest_Execute with poolCid = poolCid
+  Some tokA <- queryContractId w.alice a
+  Some tokB <- queryContractId w.alice b
+  tokA.amount === before.reserveA
+  tokB.amount === before.reserveB
+  Some empty <- queryContractId w.operator poolCid'
+  empty.totalShares === 0.0
+  empty.reserveA === 0.0
