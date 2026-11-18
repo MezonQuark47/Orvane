@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "canton-dev": {
+      "command": "npx",
+      "args": ["-y", "@canton-network-devs/canton-mcp-server@3.0.0"]
+    }
+  }
+}

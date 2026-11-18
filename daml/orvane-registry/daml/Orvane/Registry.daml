@@ -1,0 +1,182 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Orvane's token registry, implementing the Canton Network Token Standard
+-- (CIP-56) interfaces: Holding, TransferFactory, AllocationFactory and
+-- Allocation.
+--
+-- It issues test instruments such as USDx. Because everything downstream
+-- (pool, payroll, lending) talks to the standard interfaces only, the same
+-- code settles Canton Coin (Amulet) or any other CIP-56 asset.
+--
+-- Design choices:
+--   * Holdings are signed by the registry admin and observed by the owner,
+--     so receiving does not require the receiver's signature (no
+--     pre-approval needed for this test currency).
+--   * Transfers complete in one step.
+--   * An allocation escrows the funds inside the allocation contract until
+--     the executor settles, cancels, or the sender withdraws.
+module Orvane.Registry where
+
+import DA.Action (foldlA)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.TransferInstructionV1
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+
+-- ---------------------------------------------------------------- holdings
+
+template OrvaneHolding
+  with
+    admin        : Party
+    owner        : Party
+    instrument   : Text
+    amount       : Decimal
+  where
+    signatory admin
+    observer owner
+    ensure amount > 0.0 && instrument /= ""
+
+    interface instance Holding for OrvaneHolding where
+      view = HoldingView with
+        owner
+        instrumentId = InstrumentId with admin; id = instrument
+        amount
+        lock = None
+        meta = emptyMetadata
+
+-- | Consume holdings of one instrument owned by `owner`. Returns the total.
+consumeHoldings : Party -> Text -> Party -> [ContractId Holding] -> Update Decimal
+consumeHoldings admin instrument owner cids = do
+  assertMsg "no input holdings" (not (null cids))
+  foldlA consumeOne 0.0 cids
+  where
+    consumeOne acc cid = do
+      h <- fetch (fromInterfaceContractId @OrvaneHolding cid)
+      assertMsg "holding from another registry or instrument" (h.admin == admin && h.instrument == instrument)
+      assertMsg "holding not owned by the sender" (h.owner == owner)
+      archive (fromInterfaceContractId @OrvaneHolding cid)
+      pure (acc + h.amount)
+
+issue : Party -> Text -> Party -> Decimal -> Update (ContractId Holding)
+issue admin instrument owner amount =
+  toInterfaceContractId <$> create OrvaneHolding with admin, owner, instrument, amount
+
+-- | Create change for the sender if anything is left over.
+changeFor : Party -> Text -> Party -> Decimal -> Update [ContractId Holding]
+changeFor admin instrument owner rest
+  | rest > 0.0 = (\c -> [c]) <$> issue admin instrument owner rest
+  | otherwise = pure []
+
+-- ---------------------------------------------------------------- rules
+
+-- | The registry's factory. Holders see it so they can transfer and
+-- allocate; on a public network it would be shared through explicit
+-- disclosure by a registry API instead of an observer list.
+template OrvaneRules
+  with
+    admin       : Party
+    instruments : [Text]
+    users       : [Party]
+  where
+    signatory admin
+    observer users
+
+    nonconsuming choice OrvaneRules_Mint : ContractId Holding
+      with
+        instrument : Text
+        owner      : Party
+        amount     : Decimal
+      controller admin
+      do
+        assertMsg "unknown instrument" (instrument `elem` instruments)
+        issue admin instrument owner amount
+
+    choice OrvaneRules_SetUsers : ContractId OrvaneRules
+      with
+        newUsers : [Party]
+      controller admin
+      do create this with users = newUsers
+
+    interface instance TransferFactory for OrvaneRules where
+      view = TransferFactoryView with admin; meta = emptyMetadata
+
+      transferFactory_transferImpl _self TransferFactory_Transfer{..} = do
+        let t = transfer
+        assertMsg "wrong registry admin" (expectedAdmin == admin && t.instrumentId.admin == admin)
+        assertMsg "unknown instrument" (t.instrumentId.id `elem` instruments)
+        assertMsg "amount must be positive" (t.amount > 0.0)
+        now <- getTime
+        assertMsg "transfer expired" (now < t.executeBefore)
+        total <- consumeHoldings admin t.instrumentId.id t.sender t.inputHoldingCids
+        assertMsg "insufficient funds" (total >= t.amount)
+        received <- issue admin t.instrumentId.id t.receiver t.amount
+        change <- changeFor admin t.instrumentId.id t.sender (total - t.amount)
+        pure TransferInstructionResult with
+          output = TransferInstructionResult_Completed with receiverHoldingCids = [received]
+          senderChangeCids = change
+          meta = emptyMetadata
+
+      transferFactory_publicFetchImpl _self _ = pure TransferFactoryView with admin; meta = emptyMetadata
+
+    interface instance AllocationFactory for OrvaneRules where
+      view = AllocationFactoryView with admin; meta = emptyMetadata
+
+      allocationFactory_allocateImpl _self AllocationFactory_Allocate{..} = do
+        let leg = allocation.transferLeg
+            s = allocation.settlement
+        assertMsg "wrong registry admin" (expectedAdmin == admin && leg.instrumentId.admin == admin)
+        assertMsg "unknown instrument" (leg.instrumentId.id `elem` instruments)
+        assertMsg "amount must be positive" (leg.amount > 0.0)
+        now <- getTime
+        assertMsg "allocation deadline passed" (now < s.allocateBefore)
+        total <- consumeHoldings admin leg.instrumentId.id leg.sender inputHoldingCids
+        assertMsg "insufficient funds" (total >= leg.amount)
+        alloc <- create OrvaneAllocation with admin, spec = allocation
+        change <- changeFor admin leg.instrumentId.id leg.sender (total - leg.amount)
+        pure AllocationInstructionResult with
+          output = AllocationInstructionResult_Completed with allocationCid = toInterfaceContractId alloc
+          senderChangeCids = change
+          meta = emptyMetadata
+
+      allocationFactory_publicFetchImpl _self _ = pure AllocationFactoryView with admin; meta = emptyMetadata
+
+-- ---------------------------------------------------------------- allocations
+
+-- | Funds reserved for one leg of a settlement. Visible to the sender,
+-- the receiver and the executor only.
+template OrvaneAllocation
+  with
+    admin : Party
+    spec  : AllocationSpecification
+  where
+    signatory admin, spec.transferLeg.sender
+    observer spec.settlement.executor, spec.transferLeg.receiver
+
+    interface instance Allocation for OrvaneAllocation where
+      view = AllocationView with
+        allocation = spec
+        holdingCids = []
+        meta = emptyMetadata
+
+      allocation_executeTransferImpl _self _ = do
+        now <- getTime
+        assertMsg "settlement deadline passed" (now < spec.settlement.settleBefore)
+        let leg = spec.transferLeg
+        received <- issue admin leg.instrumentId.id leg.receiver leg.amount
+        pure Allocation_ExecuteTransferResult with
+          senderHoldingCids = []
+          receiverHoldingCids = [received]
+          meta = emptyMetadata
+
+      allocation_cancelImpl _self _ = do
+        let leg = spec.transferLeg
+        back <- issue admin leg.instrumentId.id leg.sender leg.amount
+        pure Allocation_CancelResult with senderHoldingCids = [back]; meta = emptyMetadata
+
+      allocation_withdrawImpl _self _ = do
+        let leg = spec.transferLeg
+        back <- issue admin leg.instrumentId.id leg.sender leg.amount
+        pure Allocation_WithdrawResult with senderHoldingCids = [back]; meta = emptyMetadata

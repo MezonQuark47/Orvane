@@ -97,6 +97,7 @@ The demo market runs on a compressed clock (one year of interest per hour, set b
 | `daml/orvane-amm` | On-ledger contracts: `Token`, `Pool`, `LpShare`, `SwapOrder`, `SwapRequest`, `LiquidityOrder`, `AddLiquidityRequest`, `RemoveLiquidityRequest`, `SwapReceipt` |
 | `daml/orvane-payments` | Payroll (`PayrollOrder`, `Payslip`, `PayrollAttestation`, `PayoutPreference`, `PayoutRequest`) and invoices (`Invoice`, `InvoiceSettlement`, `PaidInvoice`, `DisputedInvoice`). Depends on `orvane-amm` |
 | `daml/orvane-lending` | Lending market (`LendingMarket`, `SupplyPosition`, `Loan`, borrow/supply orders) and wage advances (`AdvanceLine`, `Advance`, `PayrollWithAdvances`). Depends on both packages above |
+| `daml/orvane-registry` | CIP-56 token registry for Orvane test instruments (USDx): `OrvaneHolding`, `OrvaneRules` (TransferFactory, AllocationFactory), `OrvaneAllocation`. Built on the official Splice token standard interfaces vendored in `daml/dars` |
 | `daml/orvane-amm-test` | Daml Script tests, kept in a separate package so test code is never uploaded to a validator |
 | `shared/` | TypeScript JSON Ledger API v2 client, contract types, command builders and pricing math, used by both the operator and the web app |
 | `operator/` | Node service that uploads the contracts, bootstraps a demo world and settles requests (no dependencies, Node 22.18+) |
@@ -145,7 +146,7 @@ You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com) and Java 17 or ne
 ./scripts/test.sh
 ```
 
-All 29 scripts should pass.
+All 38 scripts should pass.
 
 | Test | Checks |
 |---|---|
@@ -175,6 +176,7 @@ All 29 scripts should pass.
 | `test_addCollateral` | topping up collateral |
 | `test_advanceRepaidFromPayroll` | advance drawn, then repaid out of payroll under one signature |
 | `test_advanceLimits` | above-limit and second open advance are rejected |
+| `test_mintExposesHoldingView` … `test_settlementDeadline` | registry conformance: Holding view, transfers, DvP with two allocations settled atomically, executor cannot settle alone, withdraw, deadlines |
 
 ## Roadmap
 

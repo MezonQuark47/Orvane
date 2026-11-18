@@ -2,6 +2,7 @@
 .daml/
 *.dar
 !dars/*.dar
+!daml/dars/*.dar
 
 # Node / frontend
 node_modules/
