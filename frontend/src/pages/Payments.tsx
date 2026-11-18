@@ -23,6 +23,7 @@ import {
 } from '../../../shared/payments.ts'
 import { L, payrollWithAdvances, type Advance, type AdvanceLine, type LendingMarket } from '../../../shared/lending.ts'
 import { useOrvane, type Config, type Persona } from '../ledger/OrvaneProvider.tsx'
+import { AuditorCn, EmployeePayCn, PayrollCnComposer } from './PayrollCn.tsx'
 import { pick, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, TokenGlyph, fmt } from '../ui/bits.tsx'
 
@@ -112,8 +113,8 @@ export default function Payments() {
       </header>
       {role === 'acme' && <EmployerView data={data} config={config} />}
       {role === 'nova' && <SupplierView data={data} config={config} />}
-      {role === 'auditor' && <AuditorView data={data} />}
-      {role === 'employee' && <EmployeeView data={data} config={config} persona={persona} />}
+      {role === 'auditor' && (config.exchange ? <AuditorCn /> : <AuditorView data={data} />)}
+      {role === 'employee' && (config.exchange ? <EmployeePayCn persona={persona} /> : <EmployeeView data={data} config={config} persona={persona} />)}
     </div>
   )
 }
@@ -126,10 +127,10 @@ const SLIPPAGE = 0.01
 function EmployerView({ data, config }: { data: PayData; config: Config }) {
   return (
     <div className="pay-grid">
-      <PayrollComposer data={data} config={config} />
+      {config.exchange ? <PayrollCnComposer /> : <PayrollComposer data={data} config={config} />}
       <div className="pay-col">
         <InvoicesInbox data={data} config={config} />
-        <PayrollHistory data={data} />
+        {!config.exchange && <PayrollHistory data={data} />}
       </div>
     </div>
   )

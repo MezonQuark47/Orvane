@@ -112,6 +112,21 @@ Choice contexts and disclosed contracts (AmuletRules, open mining round) come fr
 off-ledger API and are passed through untouched. If a trade can't be filled, the operator cancels
 the trader's allocation and the funds are released.
 
+### Payroll on the token standard
+
+```
+Employee --signs once-->  PayeeConsent              (employer may pay me; operator may convert my pay)
+Employer --one signature-> PayrollOrderCn_Lock       (every line becomes an allocation; each employee sees only theirs)
+Employer --payday-->       PayrollBatch_Release      (all allocations execute atomically under the consents)
+                           ├─ PayslipCn              (signed by employer + employee, nobody else)
+                           ├─ PayrollAttestationCn   (auditor: period, headcount, total)
+                           └─ ConvertTicket          (only for employees who want Canton Coin)
+Operator                   ConvertTicket_Swap        (swaps the pay through the exchange with the employee's authority)
+```
+
+The operator never sees a payroll line unless that employee asked for a conversion, and it can't
+sell more than the pay that was just received.
+
 ## Repository layout
 
 | Path | What it is |
@@ -121,6 +136,7 @@ the trader's allocation and the funds are released.
 | `daml/orvane-lending` | Lending market (`LendingMarket`, `SupplyPosition`, `Loan`, borrow/supply orders) and wage advances (`AdvanceLine`, `Advance`, `PayrollWithAdvances`). Depends on both packages above |
 | `daml/orvane-registry` | CIP-56 token registry for Orvane test instruments (USDx): `OrvaneHolding`, `OrvaneRules` (TransferFactory, AllocationFactory), `OrvaneAllocation`. Built on the official Splice token standard interfaces vendored in `daml/dars` |
 | `daml/orvane-exchange` | Token-standard exchange: `ExchangePool`, `ExchangeSwapOrder` (allocate input + file request in one signature), `ExchangeSwapRequest` (atomic DvP settlement), `ExchangeReceipt` |
+| `daml/orvane-treasury` | Token-standard payroll: `PayeeConsent` (employee-signed delegation), `PayrollOrderCn` (lock every line as an allocation), `PayrollBatch` (atomic release), `PayslipCn`, `PayrollAttestationCn`, `ConvertTicket` (convert pay through the exchange) |
 | `daml/orvane-amm-test` | Daml Script tests, kept in a separate package so test code is never uploaded to a validator |
 | `shared/` | TypeScript JSON Ledger API v2 client (with LocalNet dev JWT), contract types, command builders, pricing math, Scan / token-standard registry client (`amulet.ts`) and registry abstraction (`exchange.ts`). Used by both the operator and the web app |
 | `operator/` | Node service that uploads the contracts, bootstraps a demo world and settles requests (no dependencies, Node 22.18+) |
@@ -195,7 +211,7 @@ You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com) and Java 17 or ne
 ./scripts/test.sh
 ```
 
-All 44 scripts should pass.
+All 50 scripts should pass.
 
 | Test | Checks |
 |---|---|
@@ -227,6 +243,7 @@ All 44 scripts should pass.
 | `test_advanceLimits` | above-limit and second open advance are rejected |
 | `test_mintExposesHoldingView` … `test_settlementDeadline` | registry conformance: Holding view, transfers, DvP with two allocations settled atomically, executor cannot settle alone, withdraw, deadlines |
 | `test_swapSettlesAtomically` … `test_orderMustPayTheOperator` | exchange: atomic two-leg settlement, no overpaying from reserves, slippage reject releases funds, mismatched allocations and orders rejected, outsiders see nothing |
+| `test_payrollLockAndRelease` … `test_cancelReturnsFunds` | token-standard payroll: lock and atomic release, per-employee privacy, auditor totals only, conversion through the exchange, operator cannot sell more than the pay, wrong consents rejected, cancel returns funds |
 
 ## Roadmap
 
@@ -234,8 +251,8 @@ All 44 scripts should pass.
 2. Web app: React with [Loop SDK](https://docs.fivenorth.io/loop-sdk/overview/) wallet connection (done, local sandbox)
 3. Operator service that settles requests through the Ledger API (done, local sandbox)
 4. LocalNet deployment (done), CIP-56 registry for USDx (done), USDx / Canton Coin exchange settling
-   through token-standard allocations (done); next: payroll
-   and lending through token-standard allocations with real Canton Coin, then DevNet
+   through token-standard allocations (done), payroll on allocations with real CC conversion (done); next:
+   lending and invoices on token-standard allocations with real Canton Coin, then DevNet
 5. Payments: private payroll and B2B invoices settled through the pool (done, local sandbox)
 6. Lending: collateralized loans with pool-priced liquidation and earned-wage advances (done, local sandbox)
 

@@ -1,0 +1,170 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+module Test.TreasuryTest where
+
+import DA.Assert
+import DA.Optional (isNone)
+import Daml.Script
+
+import Splice.Api.Token.HoldingV1 (InstrumentId)
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+import DA.Time (days, hours)
+import DA.Time (addRelTime)
+
+import Orvane.Exchange
+import Orvane.Math (getAmountOut)
+import Orvane.Registry
+import Orvane.Treasury
+import Test.ExchangeTest
+import Test.RegistryTest
+
+data Pay = Pay with
+    ex : Ex
+    acme : Party
+    rules : ContractId OrvaneRules
+    aliceConsent : ContractId PayeeConsent
+    bobConsent : ContractId PayeeConsent
+
+-- Acme pays in USDx. Alice keeps USDx, Bob wants CCx. Carol is the auditor;
+-- the exchange venue is the Orvane operator.
+paySetup : Script Pay
+paySetup = do
+  ex <- exSetup
+  let r = ex.r
+  acme <- allocateParty "Acme"
+  rules <- submit r.admin do
+    exerciseCmd r.rules OrvaneRules_SetUsers with newUsers = [r.alice, r.bob, r.carol, r.venue, acme]
+  _ <- submit r.admin do exerciseCmd rules OrvaneRules_Mint with instrument = "USDx", owner = acme, amount = 10000.0
+  aliceConsent <- submit r.alice do
+    createCmd PayeeConsent with employee = r.alice, employer = acme, operator = r.venue, receive = usdx r.admin
+  bobConsent <- submit r.bob do
+    createCmd PayeeConsent with employee = r.bob, employer = acme, operator = r.venue, receive = ccx r.admin
+  -- later helpers (e.g. allocateOutput) must use the updated rules contract
+  let ex2 = ex with r = r with rules
+  pure Pay with ex = ex2; acme; rules; aliceConsent; bobConsent
+
+lockPayroll : Pay -> [(Party, Decimal)] -> Script (ContractId PayrollBatch)
+lockPayroll p ls = do
+  let r = p.ex.r
+  now <- getTime
+  inputs <- map fst <$> holdingsOf p.acme "USDx"
+  submit p.acme do
+    createAndExerciseCmd
+      (PayrollOrderCn with
+        employer = p.acme, auditors = [r.carol], runId = "2026-11", period = "November 2026"
+        factoryCid = toInterfaceContractId @AllocationFactory p.rules
+        instrument = usdx r.admin
+        inputHoldingCids = inputs, extraArgs = noArgs
+        requestedAt = now, allocateBefore = now `addRelTime` hours 1, settleBefore = now `addRelTime` days 3
+        lines = [PayLineCn with employee = e, amount = a | (e, a) <- ls])
+      PayrollOrderCn_Lock
+
+test_payrollLockAndRelease : Script ()
+test_payrollLockAndRelease = do
+  p <- paySetup
+  let r = p.ex.r
+  batch <- lockPayroll p [(r.alice, 3000.0), (r.bob, 2500.0)]
+  -- funds are earmarked; each employee sees only their own allocation
+  acmeUsd <- balanceOf p.acme "USDx"
+  acmeUsd === 4500.0
+  aliceAllocs <- queryInterface @Allocation r.alice
+  map (\(_, v) -> fmap (\x -> x.allocation.transferLeg.amount) v) aliceAllocs === [Some 3000.0]
+  carolAllocs <- queryInterface @Allocation r.carol
+  length carolAllocs === 0
+
+  att <- submit p.acme do
+    exerciseCmd batch PayrollBatch_Release with
+      releases = [rel p.aliceConsent, rel p.bobConsent]
+  aliceUsd <- balanceOf r.alice "USDx"
+  bobUsd <- balanceOf r.bob "USDx"
+  (aliceUsd, bobUsd) === (3000.0, 2500.0)
+  -- payslips are private; the auditor (carol) only gets totals
+  aliceSlips <- query @PayslipCn r.alice
+  map (\(_, s) -> (s.employee, s.paid)) aliceSlips === [(r.alice, 3000.0)]
+  Some a <- queryContractId r.carol att
+  (a.headcount, a.total) === (2, 5500.0)
+  carolSlips <- query @PayslipCn r.carol
+  length carolSlips === 0
+  -- the operator learns only about bob's conversion, not about alice
+  tickets <- query @ConvertTicket r.venue
+  map (\(_, t) -> (t.employee, t.amount)) tickets === [(r.bob, 2500.0)]
+  opSlips <- query @PayslipCn r.venue
+  length opSlips === 0
+
+test_payrollConversionThroughExchange : Script ()
+test_payrollConversionThroughExchange = do
+  p <- paySetup
+  let r = p.ex.r
+  batch <- lockPayroll p [(r.bob, 2500.0)]
+  _ <- submit p.acme do
+    exerciseCmd batch PayrollBatch_Release with releases = [rel p.bobConsent]
+  [(ticket, _)] <- query @ConvertTicket r.venue
+  now <- getTime
+  inputs <- map fst <$> holdingsOf r.bob "USDx"
+  let quote = getAmountOut 30.0 2500.0 10000.0 50000.0
+  -- the operator files the swap with bob's delegated authority
+  req <- submit (actAs r.venue <> readAs r.bob) do
+    exerciseCmd ticket ConvertTicket_Swap with
+      poolId = "USDx-CCx"
+      factoryCid = toInterfaceContractId @AllocationFactory p.rules
+      expectedAdmin = r.admin
+      allocation = AllocationSpecification with
+        settlement = mkSettlement r now "conv-1"
+        transferLegId = "in"
+        transferLeg = TransferLeg with sender = r.bob, receiver = r.venue, amount = 2500.0, instrumentId = usdx r.admin, meta = emptyMeta
+      requestedAt = now, inputHoldingCids = inputs, extraArgs = noArgs, minOut = quote * 0.99
+  out <- allocateOutput p.ex r.bob (ccx r.admin) quote "conv-1"
+  _ <- submit r.venue do
+    exerciseCmd req ExchangeSwapRequest_Settle with
+      poolCid = p.ex.pool, outputAllocationCid = out, inputExtraArgs = noArgs, outputExtraArgs = noArgs
+  bobCc <- balanceOf r.bob "CCx"
+  bobCc === quote
+
+test_conversionCannotSellMoreThanThePay : Script ()
+test_conversionCannotSellMoreThanThePay = do
+  p <- paySetup
+  let r = p.ex.r
+  _ <- submit r.admin do exerciseCmd p.rules OrvaneRules_Mint with instrument = "USDx", owner = r.bob, amount = 9000.0
+  batch <- lockPayroll p [(r.bob, 2500.0)]
+  _ <- submit p.acme do
+    exerciseCmd batch PayrollBatch_Release with releases = [rel p.bobConsent]
+  [(ticket, _)] <- query @ConvertTicket r.venue
+  now <- getTime
+  inputs <- map fst <$> holdingsOf r.bob "USDx"
+  submitMustFail (actAs r.venue <> readAs r.bob) do
+    exerciseCmd ticket ConvertTicket_Swap with
+      poolId = "USDx-CCx"
+      factoryCid = toInterfaceContractId @AllocationFactory p.rules
+      expectedAdmin = r.admin
+      allocation = AllocationSpecification with
+        settlement = mkSettlement r now "conv-x"
+        transferLegId = "in"
+        transferLeg = TransferLeg with sender = r.bob, receiver = r.venue, amount = 9000.0, instrumentId = usdx r.admin, meta = emptyMeta
+      requestedAt = now, inputHoldingCids = inputs, extraArgs = noArgs, minOut = 0.0
+
+test_releaseWithWrongConsentFails : Script ()
+test_releaseWithWrongConsentFails = do
+  p <- paySetup
+  let r = p.ex.r
+  batch <- lockPayroll p [(r.alice, 3000.0), (r.bob, 2500.0)]
+  submitMustFail p.acme do
+    exerciseCmd batch PayrollBatch_Release with
+      releases = [rel p.bobConsent, rel p.aliceConsent]
+
+test_cancelReturnsFunds : Script ()
+test_cancelReturnsFunds = do
+  p <- paySetup
+  let r = p.ex.r
+  batch <- lockPayroll p [(r.alice, 3000.0), (r.bob, 2500.0)]
+  submit p.acme do exerciseCmd batch PayrollBatch_Cancel with withdrawArgs = [noArgs, noArgs]
+  acmeUsd <- balanceOf p.acme "USDx"
+  acmeUsd === 10000.0
+  aliceAllocs <- queryInterface @Allocation r.alice
+  assertMsg "nothing left locked for alice" (null aliceAllocs)
+  _ <- pure (isNone (None : Optional InstrumentId))
+  pure ()
+
+rel : ContractId PayeeConsent -> Release
+rel c = Release with consentCid = c; extraArgs = noArgs

@@ -14,7 +14,7 @@ import { createServer } from 'node:http'
 import { JsonLedger, LedgerError, createdOf, type Contract } from '../shared/ledger.ts'
 import { T, dec, exercise, placeLiquidity, type Pool, type Token } from '../shared/amm.ts'
 import { P, issueInvoice, setPreference } from '../shared/payments.ts'
-import { bootstrapExchange, exchangeContext, fundTrader, settleExchangeOnce, EXCHANGE_POOL_ID, type ExchangeCtx } from './exchange.ts'
+import { bootstrapExchange, bootstrapPayroll, convertPayOnce, exchangeContext, fundTrader, settleExchangeOnce, EXCHANGE_POOL_ID, type ExchangeCtx } from './exchange.ts'
 import { L, borrow, healthFactor, marketView, owedAt, supply, type LendingMarket, type Loan } from '../shared/lending.ts'
 
 // ORVANE_NETWORK=sandbox (default): `dpm sandbox`, no auth.
@@ -45,6 +45,7 @@ const DARS = [
   new URL('../daml/orvane-lending/.daml/dist/orvane-lending-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-registry/.daml/dist/orvane-registry-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-exchange/.daml/dist/orvane-exchange-0.1.0.dar', import.meta.url),
+  new URL('../daml/orvane-treasury/.daml/dist/orvane-treasury-0.1.0.dar', import.meta.url),
 ]
 
 // Admin client (allocates parties, uploads DARs). On LocalNet every call is
@@ -302,6 +303,16 @@ async function bootstrap(): Promise<Parties> {
     // Real Canton Coin is only available on a Splice network.
     exchange = await exchangeContext(() => ledger, log, exchangeParties(p))
     await bootstrapExchange(exchange, exchangeParties(p))
+    await bootstrapPayroll(exchange, {
+      operator: p.operator,
+      usdIssuer: p.usdIssuer,
+      employer: p.acme,
+      employees: [
+        { party: p.alice, wantsCC: false },
+        { party: p.bob, wantsCC: true },
+        { party: p.carol, wantsCC: false },
+      ],
+    })
   }
   log('demo world ready')
   return p
@@ -410,7 +421,10 @@ async function settleLoop(p: Parties) {
     try {
       await settleOnce(p)
       await liquidateOnce(p)
-      if (exchange) await settleExchangeOnce(exchange, p.operator)
+      if (exchange) {
+        await convertPayOnce(exchange, p.operator)
+        await settleExchangeOnce(exchange, p.operator)
+      }
     } catch (err) {
       log('settle error', err instanceof Error ? err.message : err)
     }

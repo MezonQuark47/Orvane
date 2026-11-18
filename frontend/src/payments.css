@@ -522,3 +522,13 @@
     grid-template-columns: 1fr 1fr;
   }
 }
+
+.cip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -6px 0 14px;
+}
+.timeline ol.three {
+  grid-template-columns: repeat(3, 1fr);
+}

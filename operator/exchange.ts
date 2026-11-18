@@ -17,6 +17,8 @@ import {
   type ExchangeSwapRequest,
   type Registries,
 } from '../shared/exchange.ts'
+import { TR, consentCommand, type ConvertTicket, type PayeeConsent } from '../shared/treasury.ts'
+import { prepareSwapAllocation } from './convert.ts'
 
 export const EXCHANGE_POOL_ID = 'USDx-CC'
 
@@ -96,8 +98,8 @@ export async function bootstrapExchange(ctx: ExchangeCtx, p: ExchangeParties) {
   const rulesCid = await rules(ctx, p)
   if (!(await findExchangePool(ctx, p.operator))) {
     ctx.log('seeding the USDx / Canton Coin pool with real CC')
-    await tapUpTo(ctx, p.operator, 1_000_000)
-    await mintUsdx(ctx, p, rulesCid, p.operator, 5_000)
+    await tapUpTo(ctx, p.operator, 10_000_000)
+    await mintUsdx(ctx, p, rulesCid, p.operator, 50_000)
     await ctx.ledger().submit([p.operator], [
       {
         CreateCommand: {
@@ -107,8 +109,8 @@ export async function bootstrapExchange(ctx: ExchangeCtx, p: ExchangeParties) {
             poolId: EXCHANGE_POOL_ID,
             instrA: ctx.usdx,
             instrB: ctx.amulet,
-            reserveA: dec10(5_000),
-            reserveB: dec10(1_000_000),
+            reserveA: dec10(50_000),
+            reserveB: dec10(10_000_000),
             feeBps: dec10(30),
             members: p.traders,
           },
@@ -266,3 +268,53 @@ export async function settleExchangeOnce(ctx: ExchangeCtx, operator: string) {
 }
 
 export { holdingsOf }
+
+// ---------- token-standard payroll ----------
+
+
+export interface PayrollParties {
+  operator: string
+  usdIssuer: string
+  employer: string
+  employees: Array<{ party: string; wantsCC: boolean }>
+}
+
+// Employees sign their payee consents once; the employer gets a USDx treasury.
+export async function bootstrapPayroll(ctx: ExchangeCtx, p: PayrollParties) {
+  const ledger = ctx.ledger()
+  const consents = await ledger.query<PayeeConsent>(p.employer, [TR.PayeeConsent])
+  for (const e of p.employees) {
+    if (consents.some((c) => c.payload.employee === e.party)) continue
+    await ledger.submit([e.party], [consentCommand(e.party, p.employer, p.operator, e.wantsCC ? ctx.amulet : ctx.usdx)])
+  }
+  const treasury = await spendable(ledger, p.employer, ctx.usdx)
+  if (treasury.reduce((s, h) => s + +h.view.amount, 0) < 15_000) {
+    const rulesCid = (await ledger.query<{ admin: string }>(p.usdIssuer, [ORVANE_RULES])).find((r) => r.payload.admin === p.usdIssuer)!.contractId
+    await mintUsdx(ctx, { operator: p.operator, usdIssuer: p.usdIssuer, traders: [] }, rulesCid, p.employer, 25_000)
+  }
+}
+
+// Convert paid salaries for employees who asked for another asset. The swap
+// itself is then settled by settleExchangeOnce like any other trade.
+export async function convertPayOnce(ctx: ExchangeCtx, operator: string) {
+  const ledger = ctx.ledger()
+  const tickets = await ledger.query<ConvertTicket>(operator, [TR.ConvertTicket])
+  for (const t of tickets) {
+    if (failed.has(t.contractId)) continue
+    const pool = await findExchangePool(ctx, operator)
+    if (!pool) return
+    try {
+      const prep = await prepareSwapAllocation(ctx, pool, t.payload, operator)
+      await ledger.submit(
+        [operator],
+        [{ ExerciseCommand: { templateId: TR.ConvertTicket, contractId: t.contractId, choice: 'ConvertTicket_Swap', choiceArgument: prep.args } }],
+        [t.payload.employee],
+        prep.disclosed,
+      )
+      ctx.log(`filed salary conversion ${t.payload.amount.replace(/\.?0+$/, '')} ${t.payload.from.id} -> ${t.payload.to.id}`)
+    } catch (err) {
+      failed.add(t.contractId)
+      ctx.log('salary conversion failed', err instanceof Error ? err.message : err)
+    }
+  }
+}
