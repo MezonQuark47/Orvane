@@ -13,6 +13,7 @@
 --     "the pool swapped X for Y" and never *who* traded.
 module Orvane.Amm where
 
+import DA.Action (foldlA)
 import DA.Optional (fromSomeNote)
 import Orvane.Math
 import Orvane.Token
@@ -188,6 +189,58 @@ template SwapRequest
     choice SwapRequest_Cancel : ()
       controller trader
       do pure ()
+
+-- | Merge the given holdings, carve out exactly `amount` and disclose that
+-- piece to the operator. Any remainder stays with the owner, undisclosed.
+prepareInput : Party -> [ContractId Token] -> Decimal -> Update (ContractId Token)
+prepareInput operator holdings amount = case holdings of
+  [] -> abort "no holdings given"
+  first :: rest -> do
+    merged <- foldlA (\acc next -> exercise acc Merge with otherCid = next) first rest
+    tok <- fetch merged
+    assertMsg "insufficient balance" (amount > 0.0 && amount <= tok.amount)
+    (exact, _) <- takeExact merged tok.amount amount
+    exercise exact Disclose with party = operator
+
+-- | Wallet-friendly entry point: one createAndExercise, one signature.
+-- Prepares the input and files a SwapRequest.
+template SwapOrder
+  with
+    trader    : Party
+    operator  : Party
+    poolId    : Text
+    holdings  : [ContractId Token]
+    amount    : Decimal
+    minOutput : Decimal
+  where
+    signatory trader
+
+    choice SwapOrder_Place : ContractId SwapRequest
+      controller trader
+      do
+        inputCid <- prepareInput operator holdings amount
+        create SwapRequest with trader, operator, poolId, inputCid, minOutput
+
+-- | Wallet-friendly entry point for deposits.
+template LiquidityOrder
+  with
+    provider  : Party
+    operator  : Party
+    poolId    : Text
+    holdingsA : [ContractId Token]
+    amountA   : Decimal
+    holdingsB : [ContractId Token]
+    amountB   : Decimal
+    minShares : Decimal
+  where
+    signatory provider
+
+    choice LiquidityOrder_Place : ContractId AddLiquidityRequest
+      controller provider
+      do
+        cidA <- prepareInput operator holdingsA amountA
+        cidB <- prepareInput operator holdingsB amountB
+        create AddLiquidityRequest with provider, operator, poolId, cidA, cidB, minShares
 
 -- | An LP's signed intent to deposit. Excess on one side is refunded so the
 -- pool ratio is preserved. Both tokens must be disclosed to the operator.

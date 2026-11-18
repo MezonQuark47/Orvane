@@ -195,3 +195,57 @@ test_removeLiquidity = do
   Some empty <- queryContractId w.operator poolCid'
   empty.totalShares === 0.0
   empty.reserveA === 0.0
+
+test_swapOrderSingleSignature : Script ()
+test_swapOrderSingleSignature = do
+  w <- setup
+  (w, _) <- seedLiquidity w
+  -- bob holds his USDx in two pieces and swaps 120 of the 150 total
+  t1 <- mint w.usdIssuer w.bob "USDx" 100.0
+  t2 <- mint w.usdIssuer w.bob "USDx" 50.0
+  req <- submit w.bob do
+    createAndExerciseCmd
+      (SwapOrder with
+        trader = w.bob, operator = w.operator, poolId = "USDx-CCx"
+        holdings = [t1, t2], amount = 120.0, minOutput = 0.0)
+      SwapOrder_Place
+  (_, out, _) <- submit w.operator do
+    exerciseCmd req SwapRequest_Execute with poolCid = w.poolCid
+  Some outTok <- queryContractId w.bob out
+  outTok.amount === getAmountOut 30.0 120.0 10000.0 50000.0
+  -- the 30 USDx change stays with bob and is not disclosed to the operator
+  usd <- query @Token w.bob
+  let change = [t | (_, t) <- usd, t.symbol == "USDx", t.owner == w.bob]
+  map (.amount) change === [30.0]
+  map (.observers) change === [[]]
+
+test_swapOrderInsufficientBalance : Script ()
+test_swapOrderInsufficientBalance = do
+  w <- setup
+  (w, _) <- seedLiquidity w
+  t1 <- mint w.usdIssuer w.bob "USDx" 10.0
+  submitMustFail w.bob do
+    createAndExerciseCmd
+      (SwapOrder with
+        trader = w.bob, operator = w.operator, poolId = "USDx-CCx"
+        holdings = [t1], amount = 11.0, minOutput = 0.0)
+      SwapOrder_Place
+
+test_liquidityOrder : Script ()
+test_liquidityOrder = do
+  w <- setup
+  (w, _) <- seedLiquidity w
+  a <- mint w.usdIssuer w.carol "USDx" 500.0
+  b <- mint w.ccIssuer w.carol "CCx" 2500.0
+  req <- submit w.carol do
+    createAndExerciseCmd
+      (LiquidityOrder with
+        provider = w.carol, operator = w.operator, poolId = "USDx-CCx"
+        holdingsA = [a], amountA = 500.0, holdingsB = [b], amountB = 2500.0, minShares = 0.0)
+      LiquidityOrder_Place
+  (poolCid, lp) <- submit w.operator do
+    exerciseCmd req AddLiquidityRequest_Execute with poolCid = w.poolCid
+  Some pool <- queryContractId w.operator poolCid
+  pool.reserveA === 10500.0
+  Some share <- queryContractId w.carol lp
+  assertMsg "carol got shares" (share.shares > 0.0)

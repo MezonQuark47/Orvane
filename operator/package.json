@@ -1,0 +1,13 @@
+{
+  "name": "orvane-operator",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Settlement operator for the local Orvane sandbox",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node index.ts"
+  }
+}

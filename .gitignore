@@ -20,3 +20,10 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Local sandbox working dir
+.sandbox/
+log/
+
+# Local tooling
+.claude/

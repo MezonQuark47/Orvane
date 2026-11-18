@@ -36,12 +36,19 @@ Operator --executes--> SwapRequest_Execute    (one atomic transaction)
     4. SwapReceipt     visible to trader + operator only
 ```
 
-Packages:
+Wallets only ever sign one command per action: `SwapOrder_Place` / `LiquidityOrder_Place` merge
+the user's holdings, carve out the exact amount, disclose it to the operator and file the request
+in a single transaction.
 
-- `daml/orvane-amm`: the on-ledger contracts (`Token`, `Pool`, `LpShare`, `SwapRequest`,
-  `AddLiquidityRequest`, `RemoveLiquidityRequest`, `SwapReceipt`)
-- `daml/orvane-amm-test`: Daml Script tests, kept in a separate package so test code is never
-  uploaded to a validator
+## Repository layout
+
+| Path | What it is |
+|---|---|
+| `daml/orvane-amm` | On-ledger contracts: `Token`, `Pool`, `LpShare`, `SwapOrder`, `SwapRequest`, `LiquidityOrder`, `AddLiquidityRequest`, `RemoveLiquidityRequest`, `SwapReceipt` |
+| `daml/orvane-amm-test` | Daml Script tests, kept in a separate package so test code is never uploaded to a validator |
+| `shared/` | TypeScript JSON Ledger API v2 client, contract types, command builders and pricing math, used by both the operator and the web app |
+| `operator/` | Node service that bootstraps a demo pool and settles requests (no dependencies, Node 22.18+) |
+| `frontend/` | React web app: React Three Fiber scene, Motion, Radix UI, Five North Loop SDK |
 
 Design notes:
 
@@ -52,6 +59,26 @@ Design notes:
 - Pool choices don't include the trader, so members watching the pool learn the price but not
   the counterparty.
 - If a liquidity deposit doesn't match the pool ratio, the excess is refunded.
+
+## Running the app locally
+
+You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com), Java 17 or newer and Node 22.18 or newer.
+Use three terminals:
+
+```bash
+# 1. Canton sandbox with the contracts loaded (JSON Ledger API on :6864)
+./scripts/sandbox.ps1
+
+# 2. Operator: creates parties, a seeded USDx/CCx pool, and settles requests (:7600)
+cd operator && npm start
+
+# 3. Web app (http://localhost:5173)
+cd frontend && npm install && npm run dev
+```
+
+In the app, use "Act as" to switch between Alice (liquidity provider), Bob (trader) and Carol
+(pool member). The Privacy lens tab shows, live, which contracts each of them can see.
+The sandbox is in-memory, so restarting it resets the demo.
 
 ## Running the tests
 
@@ -65,7 +92,7 @@ You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com) and Java 17 or ne
 ./scripts/test.sh
 ```
 
-All 8 scripts should pass.
+All 11 scripts should pass.
 
 | Test | Checks |
 |---|---|
@@ -76,12 +103,15 @@ All 8 scripts should pass.
 | `test_foreignTokenRejected` | a same-named token from another issuer is rejected |
 | `test_operatorCannotStealWithoutRequest` | the operator can't move disclosed funds |
 | `test_removeLiquidity` | LP withdraws reserves plus earned fees |
+| `test_swapOrderSingleSignature` | one signature merges holdings, swaps the exact amount, change stays private |
+| `test_swapOrderInsufficientBalance` | ordering more than you hold fails |
+| `test_liquidityOrder` | one-signature deposit mints an LP share |
 
 ## Roadmap
 
 1. Private AMM: swap, liquidity, LP shares (done)
-2. Web app: React with [Loop SDK](https://docs.fivenorth.io/loop-sdk/overview/) wallet connection
-3. Operator service that settles requests through the Ledger API
+2. Web app: React with [Loop SDK](https://docs.fivenorth.io/loop-sdk/overview/) wallet connection (done, local sandbox)
+3. Operator service that settles requests through the Ledger API (done, local sandbox)
 4. DevNet deployment with Canton Coin and CIP-56 token standard assets
 5. Payments: private B2B payments and payroll batches settled through the pool
 6. Lending: collateralized credit lines and earned-wage advances funded by pool liquidity
