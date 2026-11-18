@@ -287,7 +287,7 @@ async function bootstrapLending(p: Parties) {
 }
 
 let exchange: ExchangeCtx | undefined
-const exchangeParties = (p: Parties) => ({ operator: p.operator, usdIssuer: p.usdIssuer, traders: [p.alice, p.bob, p.carol, p.acme, p.nova] })
+const exchangeParties = (p: Parties) => ({ operator: p.operator, usdIssuer: p.usdIssuer, ccIssuer: p.ccIssuer, traders: [p.alice, p.bob, p.carol, p.acme, p.nova] })
 
 async function bootstrap(): Promise<Parties> {
   await uploadDars()
@@ -301,9 +301,10 @@ async function bootstrap(): Promise<Parties> {
   await bootstrapMarket(p)
   await bootstrapBusiness(p)
   await bootstrapLending(p)
-  if (NETWORK_NAME === 'localnet') {
-    // Real Canton Coin is only available on a Splice network.
-    exchange = await exchangeContext(() => ledger, log, exchangeParties(p))
+  {
+    // Token-standard flows. Real Canton Coin only exists on a Splice network;
+    // on the sandbox a CIP-56 stand-in CC from the Orvane registry is used.
+    exchange = await exchangeContext(() => ledger, log, exchangeParties(p), NETWORK_NAME === 'localnet')
     await bootstrapExchange(exchange, exchangeParties(p))
     await bootstrapPayroll(exchange, {
       operator: p.operator,
@@ -453,7 +454,7 @@ function serve(p: Parties) {
           poolId: POOL_ID,
           marketId: MARKET_ID,
           network: NETWORK_NAME,
-          exchange: exchange ? { poolId: EXCHANGE_POOL_ID, creditMarketId: CREDIT_MARKET_ID, usdx: exchange.usdx, amulet: exchange.amulet } : undefined,
+          exchange: exchange ? { poolId: EXCHANGE_POOL_ID, creditMarketId: CREDIT_MARKET_ID, usdx: exchange.usdx, amulet: exchange.amulet, realAmulet: exchange.realAmulet } : undefined,
           operator: p.operator,
           issuers: { USDx: p.usdIssuer, CCx: p.ccIssuer },
           business: { employer: p.acme, supplier: p.nova, auditor: p.auditor, employees: [p.alice, p.bob, p.carol] },

@@ -1,5 +1,10 @@
-// Token-standard exchange on LocalNet: a USDx / Canton Coin pool whose
-// trades settle through CIP-56 allocations.
+// Token-standard exchange: a USDx / Canton Coin pool whose trades settle
+// through CIP-56 allocations.
+//
+// On LocalNet "CC" is real Canton Coin (Amulet, registry served by Scan).
+// On the sandbox there is no Amulet, so a CIP-56 test coin "CC" issued by the
+// Orvane registry stands in. Contracts only see the token standard, so every
+// flow runs unchanged on both.
 
 import { LedgerError, type JsonLedger, type Transaction } from '../shared/ledger.ts'
 import { amountOut } from '../shared/amm.ts'
@@ -26,35 +31,43 @@ export interface ExchangeParties {
   operator: string
   usdIssuer: string
   traders: string[]
+  ccIssuer: string // issues the stand-in CC on the sandbox
 }
 
 export interface ExchangeCtx {
   ledger: () => JsonLedger
   log: (...args: unknown[]) => void
-  scan: Scan
+  scan?: Scan // only on LocalNet
+  realAmulet: boolean
+  ccIssuer: string
   amulet: InstrumentId
   usdx: InstrumentId
   reg: Registries
 }
 
-export async function exchangeContext(ledger: () => JsonLedger, log: ExchangeCtx['log'], p: ExchangeParties): Promise<ExchangeCtx> {
-  const scan = new Scan()
-  const dso = await scan.dso()
-  return {
-    ledger,
-    log,
-    scan,
-    amulet: { admin: dso, id: 'Amulet' },
-    usdx: { admin: p.usdIssuer, id: 'USDx' },
-    reg: registries(ledger(), scan, dso),
+export async function exchangeContext(ledger: () => JsonLedger, log: ExchangeCtx['log'], p: ExchangeParties, realAmulet: boolean): Promise<ExchangeCtx> {
+  const usdx = { admin: p.usdIssuer, id: 'USDx' }
+  if (realAmulet) {
+    const scan = new Scan()
+    const dso = await scan.dso()
+    return { ledger, log, scan, realAmulet, ccIssuer: p.ccIssuer, amulet: { admin: dso, id: 'Amulet' }, usdx, reg: registries(ledger(), scan, dso) }
   }
+  // no Amulet admin: every instrument resolves to the Orvane registry
+  return { ledger, log, realAmulet, ccIssuer: p.ccIssuer, amulet: { admin: p.ccIssuer, id: 'CC' }, usdx, reg: registries(ledger(), new Scan(), '') }
 }
 
 const sum = (xs: Array<{ view: { amount: string } }>) => xs.reduce((s, h) => s + Number(h.view.amount), 0)
 
+// Top up CC: tap real Canton Coin on LocalNet, mint the stand-in on the sandbox.
 async function tapUpTo(ctx: ExchangeCtx, party: string, target: number) {
   const have = sum(await spendable(ctx.ledger(), party, ctx.amulet))
   let missing = target - have
+  if (missing <= 1) return
+  if (!ctx.scan) {
+    const cid = await ensureRules(ctx, ctx.ccIssuer, 'CC', [])
+    await mint(ctx, ctx.ccIssuer, cid, 'CC', party, missing)
+    return
+  }
   while (missing > 1) {
     const chunk = Math.min(missing, 250_000)
     await tapAmulet(ctx.ledger(), ctx.scan, party, chunk)
@@ -62,16 +75,24 @@ async function tapUpTo(ctx: ExchangeCtx, party: string, target: number) {
   }
 }
 
-async function rules(ctx: ExchangeCtx, p: ExchangeParties) {
-  const found = (await ctx.ledger().query<{ admin: string; users: string[] }>(p.usdIssuer, [ORVANE_RULES])).find(
-    (r) => r.payload.admin === p.usdIssuer,
-  )
+// The registry rules of one Orvane-issued instrument, created on first use.
+async function ensureRules(ctx: ExchangeCtx, admin: string, instrument: string, users: string[]) {
+  const found = (await ctx.ledger().query<{ admin: string }>(admin, [ORVANE_RULES])).find((r) => r.payload.admin === admin)
   if (found) return found.contractId
-  ctx.log('opening the Orvane USDx registry')
-  const tx = await ctx.ledger().submit([p.usdIssuer], [
-    { CreateCommand: { templateId: ORVANE_RULES, createArguments: { admin: p.usdIssuer, instruments: ['USDx'], users: [p.operator, ...p.traders] } } },
-  ])
+  ctx.log(`opening the Orvane ${instrument} registry`)
+  const tx = await ctx.ledger().submit([admin], [{ CreateCommand: { templateId: ORVANE_RULES, createArguments: { admin, instruments: [instrument], users } } }])
   return tx.events.map((e) => e.CreatedEvent).find((e) => e)!.contractId
+}
+
+async function mint(ctx: ExchangeCtx, admin: string, rulesCid: string, instrument: string, owner: string, amount: number) {
+  await ctx.ledger().submit([admin], [
+    { ExerciseCommand: { templateId: ORVANE_RULES, contractId: rulesCid, choice: 'OrvaneRules_Mint', choiceArgument: { instrument, owner, amount: dec10(amount) } } },
+  ])
+}
+
+async function rules(ctx: ExchangeCtx, p: ExchangeParties) {
+  if (!ctx.realAmulet) await ensureRules(ctx, ctx.ccIssuer, 'CC', [p.operator, ...p.traders])
+  return ensureRules(ctx, p.usdIssuer, 'USDx', [p.operator, ...p.traders])
 }
 
 async function mintUsdx(ctx: ExchangeCtx, p: ExchangeParties, rulesCid: string, owner: string, amount: number) {
@@ -97,7 +118,7 @@ export async function findExchangePool(ctx: ExchangeCtx, operator: string) {
 export async function bootstrapExchange(ctx: ExchangeCtx, p: ExchangeParties) {
   const rulesCid = await rules(ctx, p)
   if (!(await findExchangePool(ctx, p.operator))) {
-    ctx.log('seeding the USDx / Canton Coin pool with real CC')
+    ctx.log(`seeding the USDx / CC pool with ${ctx.realAmulet ? 'real Canton Coin' : 'the sandbox stand-in CC'}`)
     await tapUpTo(ctx, p.operator, 10_000_000)
     await mintUsdx(ctx, p, rulesCid, p.operator, 50_000)
     await ctx.ledger().submit([p.operator], [
@@ -128,7 +149,8 @@ export async function bootstrapExchange(ctx: ExchangeCtx, p: ExchangeParties) {
 export async function fundTrader(ctx: ExchangeCtx, p: ExchangeParties, who: string) {
   const rulesCid = await rules(ctx, p)
   await mintUsdx(ctx, p, rulesCid, who, 500)
-  await tapAmulet(ctx.ledger(), ctx.scan, who, 100_000)
+  const have = sum(await spendable(ctx.ledger(), who, ctx.amulet))
+  await tapUpTo(ctx, who, have + 100_000)
 }
 
 // ---------- settlement ----------
@@ -290,7 +312,7 @@ export async function bootstrapPayroll(ctx: ExchangeCtx, p: PayrollParties) {
   const treasury = await spendable(ledger, p.employer, ctx.usdx)
   if (treasury.reduce((s, h) => s + +h.view.amount, 0) < 15_000) {
     const rulesCid = (await ledger.query<{ admin: string }>(p.usdIssuer, [ORVANE_RULES])).find((r) => r.payload.admin === p.usdIssuer)!.contractId
-    await mintUsdx(ctx, { operator: p.operator, usdIssuer: p.usdIssuer, traders: [] }, rulesCid, p.employer, 25_000)
+    await mintUsdx(ctx, { operator: p.operator, usdIssuer: p.usdIssuer, traders: [], ccIssuer: ctx.ccIssuer }, rulesCid, p.employer, 25_000)
   }
 }
 

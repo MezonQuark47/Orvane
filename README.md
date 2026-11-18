@@ -205,6 +205,12 @@ cd operator && npm run start:localnet
 cd frontend && npm run dev:localnet
 ```
 
+On the sandbox, the token-standard flows (exchange, payroll, credit) use a CIP-56 stand-in "CC"
+issued by the Orvane registry instead of Canton Coin, so everything can be developed and tested
+without Docker. LocalNet runs the same contracts against real Canton Coin.
+
+`./scripts/localnet.ps1 stop` pauses LocalNet and keeps its data; `up` resumes it.
+
 LocalNet uses the `unsafe` HS256 development secret that ships with Splice. It is for local
 development only. Wallet UIs: http://wallet.localhost:3000 (app provider), Scan: http://scan.localhost:4000.
 `./scripts/localnet.ps1 down` stops it and deletes its data.

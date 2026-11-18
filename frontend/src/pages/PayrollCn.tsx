@@ -22,7 +22,7 @@ import { EyeIcon, Panel, Rolling, TokenGlyph, fmt } from '../ui/bits.tsx'
 
 const TEMPLATES = [TR.PayeeConsent, TR.PayslipCn, TR.PayrollAttestationCn, TR.PayrollBatch, X.ExchangePool] as const
 const label = (i: InstrumentId) => (i.id === 'Amulet' ? 'CC' : i.id)
-const glyph = (i: InstrumentId) => (i.id === 'Amulet' ? 'CCx' : 'USDx')
+const glyph = (i: InstrumentId) => (i.id === 'USDx' ? 'USDx' : 'CCx')
 const DEFAULT_PAY: Record<string, number> = { Alice: 3000, Bob: 2500, Carol: 4200 }
 const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
 const nameOf = (config: Config, party: string) => config.personas.find((p) => p.party === party)?.name ?? party.split('::')[0]
@@ -76,7 +76,7 @@ export function PayrollCnComposer() {
     const runId = `PR-${Date.now().toString(36).toUpperCase()}`
     setStep({ s: 'locking', runId })
     try {
-      const reg = registries(ledger, new Scan(''), ex.amulet.admin)
+      const reg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
       const treasury = await spendable(ledger, party, ex.usdx)
       const lines = rows.filter((r) => r.amount > 0).map((r) => ({ employee: r.employee, amount: r.amount }))
       const lock = await preparePayrollLock({

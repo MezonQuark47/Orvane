@@ -91,7 +91,7 @@ export default function LendingCn() {
   return (
     <div className="page page-lending">
       <div className="narrative">
-        <p className="eyebrow">Lending · USDx against Canton Coin · CIP-56</p>
+        <p className="eyebrow">Lending · USDx against {ex.realAmulet ? 'real Canton Coin' : 'test CC'} · CIP-56</p>
         <h1 className="display">
           <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
             Borrow against CC.
@@ -101,7 +101,7 @@ export default function LendingCn() {
           </motion.span>
         </h1>
         <p className="lede">
-          Lock real Canton Coin, receive USDx in the same atomic transaction. Repay, and your CC comes back the same way. If a loan turns unsafe,
+          Lock {ex.realAmulet ? 'real Canton Coin' : 'CC'}, receive USDx in the same atomic transaction. Repay, and your CC comes back the same way. If a loan turns unsafe,
           its CC is sold into the Orvane pool on-ledger. Members see totals; nobody sees who borrowed.
         </p>
         {m && (
@@ -166,7 +166,7 @@ function useSubmit() {
   const { config, ledger, party } = useOrvane()
   const ex = config!.exchange!
   return async (build: (reg: ReturnType<typeof registries>) => Promise<{ command: Parameters<typeof ledger.submit>[1][number]; disclosed: Parameters<typeof ledger.submit>[3] }>) => {
-    const reg = registries(ledger, new Scan(''), ex.amulet.admin)
+    const reg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
     const { command, disclosed } = await build(reg)
     await ledger.submit([party!], [command], [], disclosed)
   }
@@ -207,7 +207,7 @@ function BorrowCn({ v }: { v: View }) {
       <Tilt className="swap-card">
         <header className="card-head">
           <h2>Borrow</h2>
-          <span className="badge">real CC collateral</span>
+          <span className="badge">{ex.realAmulet ? 'real CC collateral' : 'CIP-56 collateral'}</span>
         </header>
         <div className="leg">
           <div className="leg-top">

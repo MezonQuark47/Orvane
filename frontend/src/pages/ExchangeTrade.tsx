@@ -14,7 +14,7 @@ import { EyeIcon, Panel, Rolling, Sparkline, Tilt, TokenGlyph, fmt, fmtCompact }
 
 const SLIPPAGES = [0.5, 1, 3]
 const label = (i: InstrumentId) => (i.id === 'Amulet' ? 'CC' : i.id)
-const glyph = (i: InstrumentId) => (i.id === 'Amulet' ? 'CCx' : 'USDx')
+const glyph = (i: InstrumentId) => (i.id === 'USDx' ? 'USDx' : 'CCx')
 
 type Phase = { phase: 'idle' | 'signing' | 'settling' | 'done' | 'error'; ref?: string; message?: string; receipt?: ExchangeReceipt }
 
@@ -116,7 +116,7 @@ export default function ExchangeTrade() {
     if (disabled || !party) return
     setTx({ phase: 'signing' })
     try {
-      const reg = registries(ledger, new Scan(''), ex.amulet.admin)
+      const reg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
       const order = await prepareSwapOrder({ ledger, reg, trader: party, operator: config!.operator, poolId: ex.poolId, input: from, amount, minOut })
       await ledger.submit([party], [order.command], [], order.disclosed)
       setTx({ phase: 'settling', ref: order.ref })
@@ -131,11 +131,11 @@ export default function ExchangeTrade() {
     <div className="page page-trade">
       <div className="narrative">
         <motion.p className="eyebrow" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          USDx / Canton Coin · Canton LocalNet · CIP-56
+          USDx / CC · {ex.realAmulet ? 'Canton LocalNet · real Canton Coin' : 'Canton sandbox · CIP-56 test CC'}
         </motion.p>
         <h1 className="display">
           <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
-            Real Canton Coin.
+            {ex.realAmulet ? 'Real Canton Coin.' : 'Token-standard CC.'}
           </motion.span>
           <motion.span className="line accent" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}>
             <em>No audience.</em>

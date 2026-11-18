@@ -24,7 +24,7 @@ export interface Config {
   poolId: string
   marketId: string
   network?: 'sandbox' | 'localnet'
-  exchange?: { poolId: string; creditMarketId?: string; usdx: { admin: string; id: string }; amulet: { admin: string; id: string } }
+  exchange?: { poolId: string; creditMarketId?: string; realAmulet?: boolean; usdx: { admin: string; id: string }; amulet: { admin: string; id: string } }
   operator: string
   issuers: { USDx: string; CCx: string }
   business: { employer: string; supplier: string; auditor: string; employees: string[] }
