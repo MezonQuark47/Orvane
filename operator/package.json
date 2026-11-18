@@ -3,11 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Settlement operator for the local Orvane sandbox",
+  "description": "Settlement operator for Orvane (dpm sandbox or Splice LocalNet)",
   "engines": {
     "node": ">=22.18"
   },
   "scripts": {
-    "start": "node index.ts"
+    "start": "node index.ts",
+    "start:localnet": "node index.ts --localnet"
   }
 }

@@ -116,23 +116,49 @@ Design notes:
 ## Running the app locally
 
 You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com), Java 17 or newer and Node 22.18 or newer.
-Use three terminals:
+Use three terminals. Two ledgers are supported: the lightweight `dpm sandbox`, or the full Splice
+LocalNet (a local Canton Network with Canton Coin, wallets and Scan; needs Docker and ~10 GB RAM).
+
+**Option A: sandbox (fast, ~2 GB RAM)**
 
 ```bash
 # 1. Canton sandbox with the contracts loaded (JSON Ledger API on :6864)
 ./scripts/sandbox.ps1
 
-# 2. Operator: creates parties, a seeded USDx/CCx pool, and settles requests (:7600)
+# 2. Operator: uploads contracts, creates parties and the demo world, settles requests (:7600)
 cd operator && npm start
 
 # 3. Web app (http://localhost:5173)
 cd frontend && npm install && npm run dev
 ```
 
+**Option B: Splice LocalNet (full Canton Network)**
+
+Download and unpack the Splice node bundle matching DevNet
+([releases](https://github.com/digital-asset/decentralized-canton-sync/releases), currently 0.10.2)
+and set `ORVANE_SPLICE_DIR` to its `splice-node` folder. Then:
+
+```bash
+# 1. Start LocalNet (first run pulls images; give Docker ~11 GB of memory)
+./scripts/localnet.ps1 up
+
+# 2. Build the contracts, then run the operator against the app-provider participant (:3975)
+cd daml && dpm build --all && cd ..
+cd operator && npm run start:localnet
+
+# 3. Web app; the dev proxy signs LocalNet's development JWT, so no secret reaches the browser
+cd frontend && npm run dev:localnet
+```
+
+LocalNet uses the `unsafe` HS256 development secret that ships with Splice. It is for local
+development only. Wallet UIs: http://wallet.localhost:3000 (app provider), Scan: http://scan.localhost:4000.
+`./scripts/localnet.ps1 down` stops it and deletes its data.
+
 In the app, use "Act as" to switch between Alice (liquidity provider), Bob (trader), Carol
 (pool member), Acme (employer and buyer), Nova (supplier) and the Auditor. The Privacy lens tab
 shows, live, which contracts each of them can see.
-The sandbox is in-memory, so restarting it resets the demo.
+The sandbox is in-memory, so restarting it resets the demo. On LocalNet the operator recognises an
+existing demo world and does not seed it twice.
 
 ## Running the tests
 
@@ -183,7 +209,8 @@ All 38 scripts should pass.
 1. Private AMM: swap, liquidity, LP shares (done)
 2. Web app: React with [Loop SDK](https://docs.fivenorth.io/loop-sdk/overview/) wallet connection (done, local sandbox)
 3. Operator service that settles requests through the Ledger API (done, local sandbox)
-4. DevNet deployment with Canton Coin and CIP-56 token standard assets
+4. LocalNet deployment (done) and a CIP-56 registry for USDx (done); next: settling pool, payroll
+   and lending through token-standard allocations with real Canton Coin, then DevNet
 5. Payments: private payroll and B2B invoices settled through the pool (done, local sandbox)
 6. Lending: collateralized loans with pool-priced liquidation and earned-wage advances (done, local sandbox)
 

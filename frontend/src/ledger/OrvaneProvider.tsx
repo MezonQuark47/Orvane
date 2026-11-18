@@ -23,6 +23,7 @@ export interface Persona {
 export interface Config {
   poolId: string
   marketId: string
+  network?: 'sandbox' | 'localnet'
   operator: string
   issuers: { USDx: string; CCx: string }
   business: { employer: string; supplier: string; auditor: string; employees: string[] }
@@ -89,7 +90,9 @@ interface OrvaneState {
 
 const Ctx = createContext<OrvaneState | null>(null)
 
-const ledger = new JsonLedger('')
+// The dev proxy authenticates as ledger user "orvane" on LocalNet; commands
+// must carry the same user id. On the sandbox the user id is not checked.
+const ledger = new JsonLedger('', 'orvane')
 const POLL_MS = 1200
 
 const num = (s: string) => Number(s)

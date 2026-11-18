@@ -7,7 +7,7 @@ import { EyeIcon, Panel, Rolling, Sparkline, Tilt, TokenGlyph, fmt, fmtCompact }
 const SLIPPAGES = [0.1, 0.5, 1, 3]
 
 export default function Trade() {
-  const { pool, history, balances, swap, tx, resetTx, receipts, persona } = useOrvane()
+  const { pool, history, balances, swap, tx, resetTx, receipts, persona, config } = useOrvane()
   const [from, setFrom] = useState<Symbol>('USDx')
   const [raw, setRaw] = useState('')
   const [slippage, setSlippage] = useState(0.5)
@@ -53,7 +53,7 @@ export default function Trade() {
     <div className="page page-trade">
       <div className="narrative">
         <motion.p className="eyebrow" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
-          USDx / CCx · Canton sandbox
+          USDx / CCx · {config?.network === 'localnet' ? 'Canton LocalNet' : 'Canton sandbox'}
         </motion.p>
         <h1 className="display">
           <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>

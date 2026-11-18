@@ -16,7 +16,21 @@ import { T, dec, exercise, placeLiquidity, type Pool, type Token } from '../shar
 import { P, issueInvoice, setPreference } from '../shared/payments.ts'
 import { L, borrow, healthFactor, marketView, owedAt, supply, type LendingMarket, type Loan } from '../shared/lending.ts'
 
-const LEDGER_URL = process.env.LEDGER_URL ?? 'http://localhost:6864'
+// ORVANE_NETWORK=sandbox (default): `dpm sandbox`, no auth.
+// ORVANE_NETWORK=localnet: Splice LocalNet, app-provider participant, HS256 dev auth.
+const NETWORKS = {
+  sandbox: { url: 'http://localhost:6864', adminUser: 'participant_admin', appUser: 'orvane', auth: undefined },
+  localnet: {
+    url: 'http://localhost:3975',
+    adminUser: 'ledger-api-user',
+    appUser: 'orvane',
+    auth: { secret: process.env.LOCALNET_AUTH_SECRET ?? 'unsafe', audience: 'https://canton.network.global' },
+  },
+} as const
+const NETWORK_NAME = (process.env.ORVANE_NETWORK ?? (process.argv.includes('--localnet') ? 'localnet' : 'sandbox')) as keyof typeof NETWORKS
+const NETWORK = NETWORKS[NETWORK_NAME]
+if (!NETWORK) throw new Error(`unknown ORVANE_NETWORK "${process.env.ORVANE_NETWORK}"`)
+const LEDGER_URL = process.env.LEDGER_URL ?? NETWORK.url
 const PORT = Number(process.env.OPERATOR_PORT ?? 7600)
 const POOL_ID = 'USDx-CCx'
 const MARKET_ID = 'USDx-lend'
@@ -28,9 +42,14 @@ const DARS = [
   new URL('../daml/orvane-amm/.daml/dist/orvane-defi-amm-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-payments/.daml/dist/orvane-payments-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-lending/.daml/dist/orvane-lending-0.1.0.dar', import.meta.url),
+  new URL('../daml/orvane-registry/.daml/dist/orvane-registry-0.1.0.dar', import.meta.url),
 ]
 
-const ledger = new JsonLedger(LEDGER_URL)
+// Admin client (allocates parties, uploads DARs). On LocalNet every call is
+// authenticated with a JWT; the sandbox has no auth.
+const admin = new JsonLedger(LEDGER_URL, NETWORK.adminUser, NETWORK.auth)
+// Client used for everything else; switches to the app user after bootstrap.
+let ledger = admin
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args)
 
 const HINTS = {
@@ -60,7 +79,7 @@ async function uploadDars() {
     // synchronizer yet; retry for a while.
     for (let attempt = 1; ; attempt++) {
       try {
-        await ledger.uploadDar(bytes)
+        await admin.uploadDar(bytes)
         break
       } catch (err) {
         if (attempt >= 30) throw err
@@ -71,10 +90,10 @@ async function uploadDars() {
 }
 
 async function ensureParties(): Promise<Parties> {
-  const existing = await ledger.listParties()
+  const existing = await admin.listParties()
   const out = {} as Parties
   for (const [key, hint] of Object.entries(HINTS) as Array<[keyof Parties, string]>) {
-    out[key] = existing.find((p) => p.startsWith(`${hint}::`)) ?? (await ledger.allocateParty(hint))
+    out[key] = existing.find((p) => p.startsWith(`${hint}::`)) ?? (await admin.allocateParty(hint))
   }
   return out
 }
@@ -265,6 +284,12 @@ async function bootstrapLending(p: Parties) {
 async function bootstrap(): Promise<Parties> {
   await uploadDars()
   const p = await ensureParties()
+  if (NETWORK.appUser) {
+    // Authenticated participant: one ledger user acts for all demo parties.
+    await admin.ensureUser(NETWORK.appUser, Object.values(p))
+    ledger = admin.as(NETWORK.appUser)
+    log(`acting as ledger user "${NETWORK.appUser}"`)
+  }
   await bootstrapMarket(p)
   await bootstrapBusiness(p)
   await bootstrapLending(p)
@@ -397,6 +422,7 @@ function serve(p: Parties) {
         return send(200, {
           poolId: POOL_ID,
           marketId: MARKET_ID,
+          network: NETWORK_NAME,
           operator: p.operator,
           issuers: { USDx: p.usdIssuer, CCx: p.ccIssuer },
           business: { employer: p.acme, supplier: p.nova, auditor: p.auditor, employees: [p.alice, p.bob, p.carol] },
@@ -432,7 +458,7 @@ function serve(p: Parties) {
 async function waitForLedger() {
   for (let i = 0; ; i++) {
     try {
-      await ledger.ledgerEnd()
+      await admin.ledgerEnd()
       return
     } catch {
       if (i === 0) log(`waiting for ledger at ${LEDGER_URL} ...`)

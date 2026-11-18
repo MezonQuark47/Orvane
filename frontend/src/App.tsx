@@ -37,7 +37,7 @@ function readTab(): Tab {
 }
 
 function Shell() {
-  const { status, history, pool, pulse, persona } = useOrvane()
+  const { status, history, pool, pulse, persona, config } = useOrvane()
   const [tab, setTab] = useState<Tab>(readTab)
   useEffect(() => {
     const on = () => setTab(readTab())
@@ -110,7 +110,7 @@ function Shell() {
         <footer className="foot">
           <span>Daml · Canton Network</span>
           <span className="sep" />
-          <span>{status === 'ready' ? 'Connected to local sandbox' : status === 'connecting' ? 'Connecting…' : 'Sandbox offline'}</span>
+          <span>{status === 'ready' ? `Connected to ${config?.network === 'localnet' ? 'Canton LocalNet' : 'local sandbox'}` : status === 'connecting' ? 'Connecting…' : 'Ledger offline'}</span>
           <span className={`live ${status}`} aria-hidden />
         </footer>
       </div>

@@ -78,19 +78,63 @@ export class LedgerError extends Error {
   }
 }
 
+// ---------- auth ----------
+
+// HS256 JWT for participants running with `unsafe-jwt-hmac-256` auth, as the
+// Splice LocalNet does. Never use this against a real network.
+export interface HmacAuth {
+  secret: string
+  audience: string
+}
+
+const b64url = (bytes: Uint8Array | string) => {
+  const raw = typeof bytes === 'string' ? new TextEncoder().encode(bytes) : bytes
+  let s = ''
+  for (const b of raw) s += String.fromCharCode(b)
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+export async function hmacJwt(auth: HmacAuth, userId: string, ttlSeconds = 7 * 24 * 3600): Promise<string> {
+  const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const now = Math.floor(Date.now() / 1000)
+  const payload = b64url(JSON.stringify({ sub: userId, aud: auth.audience, iat: now, exp: now + ttlSeconds }))
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(auth.secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${header}.${payload}`)))
+  return `${header}.${payload}.${b64url(sig)}`
+}
+
 export class JsonLedger {
   readonly baseUrl: string
   readonly userId: string
+  private readonly auth?: HmacAuth
+  private token?: { value: string; exp: number }
 
-  constructor(baseUrl: string, userId = 'participant_admin') {
+  constructor(baseUrl: string, userId = 'participant_admin', auth?: HmacAuth) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
     this.userId = userId
+    this.auth = auth
+  }
+
+  // A client for the same participant acting as another ledger user.
+  as(userId: string): JsonLedger {
+    return new JsonLedger(this.baseUrl, userId, this.auth)
+  }
+
+  private async headers(json: boolean): Promise<Record<string, string>> {
+    const h: Record<string, string> = json ? { 'content-type': 'application/json' } : {}
+    if (this.auth) {
+      if (!this.token || this.token.exp < Date.now() + 60_000) {
+        this.token = { value: await hmacJwt(this.auth, this.userId, 3600), exp: Date.now() + 3600_000 }
+      }
+      h.authorization = `Bearer ${this.token.value}`
+    }
+    return h
   }
 
   private async call<T>(path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      headers: await this.headers(body !== undefined),
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     const text = await res.text()
@@ -120,10 +164,27 @@ export class JsonLedger {
   async uploadDar(bytes: Uint8Array): Promise<void> {
     const res = await fetch(`${this.baseUrl}/v2/packages`, {
       method: 'POST',
-      headers: { 'content-type': 'application/octet-stream' },
-      body: bytes,
+      headers: { ...(await this.headers(false)), 'content-type': 'application/octet-stream' },
+      body: new Blob([bytes as Uint8Array<ArrayBuffer>]),
     })
     if (!res.ok) throw new LedgerError(res.status, await res.text())
+  }
+
+  // Make sure a ledger user exists and may act and read as `parties`.
+  async ensureUser(userId: string, parties: string[]): Promise<void> {
+    const rights = parties.flatMap((party) => [
+      { kind: { CanActAs: { value: { party } } } },
+      { kind: { CanReadAs: { value: { party } } } },
+    ])
+    try {
+      await this.call('/v2/users', {
+        user: { id: userId, primaryParty: '', isDeactivated: false, identityProviderId: '', metadata: { resourceVersion: '', annotations: {} } },
+        rights,
+      })
+    } catch (err) {
+      if (!(err instanceof LedgerError) || !/ALREADY_EXISTS|already exists/i.test(err.body)) throw err
+      await this.call(`/v2/users/${encodeURIComponent(userId)}/rights`, { userId, rights, identityProviderId: '' })
+    }
   }
 
   async query<T>(party: string, templateIds: string[]): Promise<Contract<T>[]> {
