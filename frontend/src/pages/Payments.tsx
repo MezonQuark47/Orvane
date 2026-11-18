@@ -21,7 +21,9 @@ import {
   type PayrollAttestation,
   type Payslip,
 } from '../../../shared/payments.ts'
+import { L, payrollWithAdvances, type Advance, type AdvanceLine, type LendingMarket } from '../../../shared/lending.ts'
 import { useOrvane, type Config, type Persona } from '../ledger/OrvaneProvider.tsx'
+import { pick, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, TokenGlyph, fmt } from '../ui/bits.tsx'
 
 // ---------- data ----------
@@ -142,11 +144,19 @@ function PayrollComposer({ data, config }: { data: PayData; config: Config }) {
   const [period, setPeriod] = useState(() => new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' }))
   const [state, setState] = useState<{ phase: 'idle' | 'busy' | 'done' | 'error'; msg?: string; runId?: string }>({ phase: 'idle' })
 
+  // Open wage advances are repaid out of this payroll, in the same transaction.
+  const lend = usePolled([L.Advance, L.AdvanceLine, L.LendingMarket])
+  const advances = pick<Advance>(lend, 'Advance').filter((a) => a.payload.employer === party)
+  const advLines = pick<AdvanceLine>(lend, 'AdvanceLine')
+  const market = pick<LendingMarket>(lend, 'LendingMarket')[0]
+
   const rows = employees.map((e) => {
     const amount = Number(amounts[e]) || 0
+    const deduction = advances.filter((a) => a.payload.employee === e).reduce((s, a) => s + +a.payload.principal + +a.payload.fee, 0)
+    const net = Math.max(0, amount - deduction)
     const pref = data.prefs.find((p) => p.payload.employee === e)?.payload.symbol ?? 'USDx'
-    const quote = pref === 'CCx' && pool ? amountOut(pool.feeBps, amount, pool.reserveA, pool.reserveB) : amount
-    return { employee: e, name: nameOf(config, e), amount, pref, quote }
+    const quote = pref === 'CCx' && pool ? amountOut(pool.feeBps, net, pool.reserveA, pool.reserveB) : net
+    return { employee: e, name: nameOf(config, e), amount, net, deduction, pref, quote }
   })
   const total = rows.reduce((s, r) => s + r.amount, 0)
   const converting = rows.filter((r) => r.pref !== 'USDx').length
@@ -155,23 +165,35 @@ function PayrollComposer({ data, config }: { data: PayData; config: Config }) {
   const run = async () => {
     const runId = `PR-${Date.now().toString(36).toUpperCase()}`
     setState({ phase: 'busy', runId })
+    const common = {
+      employer: party!,
+      operator: config.operator,
+      poolId: config.poolId,
+      auditors: [config.business.auditor],
+      runId,
+      period,
+      issuer: config.issuers.USDx,
+      symbol: 'USDx',
+      holdings: holdingsFor('USDx'),
+      lines: rows
+        .filter((r) => r.amount > 0)
+        .map((r) => ({ employee: r.employee, amount: r.amount, receiveSymbol: r.pref, minReceive: r.pref === 'USDx' ? 0 : r.quote * (1 - SLIPPAGE) })),
+    }
     try {
-      await submit([
-        runPayroll({
-          employer: party!,
-          operator: config.operator,
-          poolId: config.poolId,
-          auditors: [config.business.auditor],
-          runId,
-          period,
-          issuer: config.issuers.USDx,
-          symbol: 'USDx',
-          holdings: holdingsFor('USDx'),
-          lines: rows
-            .filter((r) => r.amount > 0)
-            .map((r) => ({ employee: r.employee, amount: r.amount, receiveSymbol: r.pref, minReceive: r.pref === 'USDx' ? 0 : r.quote * (1 - SLIPPAGE) })),
-        }),
-      ])
+      if (advances.length && market) {
+        await submit([
+          payrollWithAdvances({
+            ...common,
+            advances: advances.map((a) => ({
+              advanceCid: a.contractId,
+              lineCid: advLines.find((l) => l.payload.employee === a.payload.employee)!.contractId,
+            })),
+            marketCid: market.contractId,
+          }),
+        ])
+      } else {
+        await submit([runPayroll(common)])
+      }
       setState({ phase: 'done', runId })
     } catch (e) {
       setState({ phase: 'error', msg: errText(e) })
@@ -179,7 +201,7 @@ function PayrollComposer({ data, config }: { data: PayData; config: Config }) {
   }
 
   const slipsForRun = state.runId ? data.payslips.filter((s) => s.payload.runId === state.runId) : []
-  const linesInRun = rows.filter((r) => r.amount > 0).length
+  const linesInRun = rows.filter((r) => r.net > 0).length
 
   return (
     <Panel delay={0.1} className="payroll">
@@ -220,6 +242,7 @@ function PayrollComposer({ data, config }: { data: PayData; config: Config }) {
             <span className="mono quote">
               {r.pref === 'USDx' ? '' : '≈ '}
               {fmt(r.quote, 2)} {r.pref}
+              {r.deduction > 0 && <span className="deduct">−{fmt(r.deduction)} advance repaid</span>}
             </span>
           </motion.div>
         ))}
@@ -586,7 +609,7 @@ function EmployeeView({ data, config, persona }: { data: PayData; config: Config
                   </div>
                   <div className="slip-body">
                     <div>
-                      <span className="muted small">Gross</span>
+                      <span className="muted small">Net pay</span>
                       <span className="mono">
                         {fmt(+s.payload.gross)} {s.payload.paySymbol}
                       </span>

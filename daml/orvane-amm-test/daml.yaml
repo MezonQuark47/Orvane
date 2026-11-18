@@ -9,3 +9,4 @@ dependencies:
 data-dependencies:
   - ../orvane-amm/.daml/dist/orvane-defi-amm-0.1.0.dar
   - ../orvane-payments/.daml/dist/orvane-payments-0.1.0.dar
+  - ../orvane-lending/.daml/dist/orvane-lending-0.1.0.dar

@@ -14,16 +14,20 @@ import { createServer } from 'node:http'
 import { JsonLedger, LedgerError, createdOf, type Contract } from '../shared/ledger.ts'
 import { T, dec, exercise, placeLiquidity, type Pool, type Token } from '../shared/amm.ts'
 import { P, issueInvoice, setPreference } from '../shared/payments.ts'
+import { L, borrow, healthFactor, marketView, owedAt, supply, type LendingMarket, type Loan } from '../shared/lending.ts'
 
 const LEDGER_URL = process.env.LEDGER_URL ?? 'http://localhost:6864'
 const PORT = Number(process.env.OPERATOR_PORT ?? 7600)
 const POOL_ID = 'USDx-CCx'
+const MARKET_ID = 'USDx-lend'
+const DEMO_YEAR_SECONDS = 3600
 const FEE_BPS = 30
 const TICK_MS = 700
 
 const DARS = [
   new URL('../daml/orvane-amm/.daml/dist/orvane-defi-amm-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-payments/.daml/dist/orvane-payments-0.1.0.dar', import.meta.url),
+  new URL('../daml/orvane-lending/.daml/dist/orvane-lending-0.1.0.dar', import.meta.url),
 ]
 
 const ledger = new JsonLedger(LEDGER_URL)
@@ -42,7 +46,7 @@ const HINTS = {
 } as const
 type Parties = Record<keyof typeof HINTS, string>
 
-const TEMPLATES: Record<string, string> = { ...T, ...P }
+const TEMPLATES: Record<string, string> = { ...T, ...P, ...L }
 
 async function uploadDars() {
   for (const dar of DARS) {
@@ -190,11 +194,80 @@ async function bootstrapBusiness(p: Parties) {
   ])
 }
 
+async function findMarket(p: Parties): Promise<Contract<LendingMarket> | undefined> {
+  const markets = await ledger.query<LendingMarket>(p.operator, [L.LendingMarket])
+  return markets.find((m) => m.payload.marketId === MARKET_ID)
+}
+
+async function bootstrapLending(p: Parties) {
+  if (await findMarket(p)) return
+  log('creating lending market', MARKET_ID)
+  await ledger.submit([p.operator], [
+    {
+      CreateCommand: {
+        templateId: L.LendingMarket,
+        createArguments: {
+          operator: p.operator,
+          marketId: MARKET_ID,
+          assetIssuer: p.usdIssuer,
+          assetSymbol: 'USDx',
+          collIssuer: p.ccIssuer,
+          collSymbol: 'CCx',
+          poolId: POOL_ID,
+          cash: dec(0),
+          cashHoldings: [],
+          principalOut: dec(0),
+          totalShares: dec(0),
+          baseAprBps: dec(200),
+          slopeAprBps: dec(1800),
+          maxLtvBps: dec(6000),
+          liqLtvBps: dec(8000),
+          // Demo clock: one year of interest accrues every hour.
+          yearSeconds: String(DEMO_YEAR_SECONDS), // Daml Int travels as a string
+          badDebt: dec(0),
+          members: members(p),
+        },
+      },
+    },
+  ])
+  // Alice supplies 120,000 USDx.
+  await fund(p, p.alice, 120_000, 0)
+  const usd = await holdingsOf(p.alice, p.usdIssuer, 'USDx')
+  await ledger.submit([p.alice], [supply(p.alice, p.operator, MARKET_ID, usd.map((t) => t.contractId), 120_000)])
+  await settleOnce(p)
+
+  // Acme borrows 15,000 USDx against 150,000 CCx of extra collateral.
+  await fund(p, p.acme, 0, 150_000)
+  const cc = await holdingsOf(p.acme, p.ccIssuer, 'CCx')
+  const big = cc.find((t) => +t.payload.amount === 150_000) ?? cc[0]
+  await ledger.submit([p.acme], [
+    borrow({ borrower: p.acme, operator: p.operator, marketId: MARKET_ID, holdings: [big.contractId], collateralAmount: 150_000, borrowAmount: 15_000 }),
+  ])
+  await settleOnce(p)
+
+  // Acme stands behind earned-wage advances of up to half a month's pay.
+  for (const [who, limit] of [
+    [p.alice, 1_500],
+    [p.bob, 1_250],
+    [p.carol, 2_100],
+  ] as const) {
+    await ledger.submit([p.acme], [
+      {
+        CreateCommand: {
+          templateId: L.AdvanceLine,
+          createArguments: { employer: p.acme, employee: who, operator: p.operator, marketId: MARKET_ID, limit: dec(limit), feeBps: dec(100), drawn: dec(0) },
+        },
+      },
+    ])
+  }
+}
+
 async function bootstrap(): Promise<Parties> {
   await uploadDars()
   const p = await ensureParties()
   await bootstrapMarket(p)
   await bootstrapBusiness(p)
+  await bootstrapLending(p)
   log('demo world ready')
   return p
 }
@@ -206,7 +279,13 @@ const ON_FAIL: Record<string, (reason: string) => [string, unknown] | undefined>
   SwapRequest: (reason) => ['SwapRequest_Reject', { reason }],
   PayoutRequest: (reason) => ['PayoutRequest_Fallback', { reason }],
   InvoiceSettlement: (reason) => ['InvoiceSettlement_Reject', { reason }],
+  BorrowRequest: (reason) => ['BorrowRequest_Reject', { reason }],
+  AdvanceRequest: (reason) => ['AdvanceRequest_Reject', { reason }],
 }
+
+// Which contracts each request's Execute choice needs.
+const NEEDS_MARKET = new Set(['SupplyRequest', 'WithdrawSupplyRequest', 'AdvanceRequest'])
+const NEEDS_BOTH = new Set(['BorrowRequest'])
 
 const failed = new Set<string>()
 
@@ -217,6 +296,10 @@ async function settleOnce(p: Parties) {
     T.RemoveLiquidityRequest,
     P.PayoutRequest,
     P.InvoiceSettlement,
+    L.SupplyRequest,
+    L.WithdrawSupplyRequest,
+    L.BorrowRequest,
+    L.AdvanceRequest,
   ])
   for (const req of requests) {
     if (failed.has(req.contractId)) continue
@@ -225,7 +308,13 @@ async function settleOnce(p: Parties) {
     const kind = req.templateId.split(':').pop()!
     const templateId = TEMPLATES[kind]
     try {
-      const tx = await ledger.submit([p.operator], [exercise(templateId, req.contractId, `${kind}_Execute`, { poolCid: pool.contractId })])
+      let args: Record<string, string> = { poolCid: pool.contractId }
+      if (NEEDS_MARKET.has(kind) || NEEDS_BOTH.has(kind)) {
+        const market = await findMarket(p)
+        if (!market) continue
+        args = NEEDS_BOTH.has(kind) ? { marketCid: market.contractId, poolCid: pool.contractId } : { marketCid: market.contractId }
+      }
+      const tx = await ledger.submit([p.operator], [exercise(templateId, req.contractId, `${kind}_Execute`, args)])
       const receipt = createdOf(tx, T.SwapReceipt)
       if (receipt) {
         const r = receipt.createArgument as { symbolIn: string; amountIn: string; symbolOut: string; amountOut: string }
@@ -254,10 +343,38 @@ async function settleOnce(p: Parties) {
   }
 }
 
+// Liquidation keeper: close any loan whose debt crossed the threshold by
+// selling its collateral through the pool.
+async function liquidateOnce(p: Parties) {
+  const loans = await ledger.query<Loan>(p.operator, [L.Loan])
+  if (!loans.length) return
+  const [market, pool] = await Promise.all([findMarket(p), findPool(p)])
+  if (!market || !pool) return
+  const m = marketView(market.payload)
+  const price = +pool.payload.reserveA / +pool.payload.reserveB
+  for (const loan of loans) {
+    const l = loan.payload
+    const owed = owedAt(m.yearSeconds, +l.principal, +l.aprBps, l.openedAt)
+    const hf = healthFactor(+l.collateralAmount * price, m.liqLtv, owed)
+    if (hf >= 1) continue
+    try {
+      const freshMarket = await findMarket(p)
+      const freshPool = await findPool(p)
+      await ledger.submit([p.operator], [
+        exercise(L.Loan, loan.contractId, 'Loan_Liquidate', { marketCid: freshMarket!.contractId, poolCid: freshPool!.contractId }),
+      ])
+      log(`liquidated a loan (health ${hf.toFixed(3)}) through ${POOL_ID}`)
+    } catch (err) {
+      log('liquidation failed', err instanceof LedgerError ? err.message : err)
+    }
+  }
+}
+
 async function settleLoop(p: Parties) {
   for (;;) {
     try {
       await settleOnce(p)
+      await liquidateOnce(p)
     } catch (err) {
       log('settle error', err instanceof Error ? err.message : err)
     }
@@ -279,6 +396,7 @@ function serve(p: Parties) {
       if (req.method === 'GET' && req.url === '/api/config') {
         return send(200, {
           poolId: POOL_ID,
+          marketId: MARKET_ID,
           operator: p.operator,
           issuers: { USDx: p.usdIssuer, CCx: p.ccIssuer },
           business: { employer: p.acme, supplier: p.nova, auditor: p.auditor, employees: [p.alice, p.bob, p.carol] },

@@ -1,0 +1,188 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Earned-wage advances, funded by the lending market and repaid out of
+-- the next payroll.
+--
+--   * The employer opens an AdvanceLine per employee with a limit. The
+--     employer stands behind it: advances are deducted from payroll.
+--   * The employee draws an advance; the operator pays it from market cash.
+--   * The employer runs PayrollWithAdvances: one signature repays every open
+--     advance (principal + fee) to the market and pays everyone their net.
+--
+-- The market's members see cash going out and coming back, never who drew
+-- an advance. The employee's colleagues see nothing.
+module Orvane.Advance where
+
+import DA.Action (foldlA)
+import DA.Foldable (forA_)
+import DA.Optional (optionalToList)
+import Orvane.Lending
+import Orvane.Math (bpsDenominator)
+import Orvane.Pay.Util (mergeHoldings)
+import Orvane.Payroll (PayLine(..), PayrollAttestation, PayrollOrder(..), PayrollOrder_Run(..))
+import Orvane.Token
+
+template AdvanceLine
+  with
+    employer : Party
+    employee : Party
+    operator : Party
+    marketId : Text
+    limit    : Decimal
+    feeBps   : Decimal
+    drawn    : Decimal
+  where
+    signatory employer
+    observer employee, operator
+    ensure limit >= 0.0 && drawn >= 0.0 && drawn <= limit && feeBps >= 0.0
+
+    choice AdvanceLine_SetLimit : ContractId AdvanceLine
+      with
+        newLimit : Decimal
+      controller employer
+      do create this with limit = max newLimit drawn
+
+    choice AdvanceLine_Draw : ContractId AdvanceLine
+      with
+        amount : Decimal
+      controller operator
+      do create this with drawn = drawn + amount
+
+    choice AdvanceLine_Restore : ContractId AdvanceLine
+      with
+        amount : Decimal
+      controller operator
+      do create this with drawn = max 0.0 (drawn - amount)
+
+template AdvanceRequest
+  with
+    employee : Party
+    operator : Party
+    lineCid  : ContractId AdvanceLine
+    amount   : Decimal
+  where
+    signatory employee
+    observer operator
+    ensure amount > 0.0
+
+    choice AdvanceRequest_Execute : ContractId Advance
+      with
+        marketCid : ContractId LendingMarket
+      controller operator
+      do
+        line <- fetch lineCid
+        market <- fetch marketCid
+        assertMsg "line does not belong to this employee" (line.employee == employee && line.operator == operator)
+        assertMsg "wrong market" (market.marketId == line.marketId)
+        assertMsg "one open advance per pay period" (line.drawn == 0.0)
+        assertMsg "above the advance limit" (amount <= line.limit)
+        _ <- exercise lineCid AdvanceLine_Draw with amount
+        (_, cashOut) <- exercise marketCid Market_Lend with amount
+        _ <- exercise cashOut Transfer with newOwner = employee
+        now <- getTime
+        create Advance with
+          operator, employee, employer = line.employer, marketId = line.marketId
+          principal = amount, fee = amount * line.feeBps / bpsDenominator, drawnAt = now
+
+    choice AdvanceRequest_Reject : ()
+      with
+        reason : Text
+      controller operator
+      do pure ()
+
+-- | An outstanding advance. The employer sees it so it can be deducted.
+template Advance
+  with
+    operator  : Party
+    employee  : Party
+    employer  : Party
+    marketId  : Text
+    principal : Decimal
+    fee       : Decimal
+    drawnAt   : Time
+  where
+    signatory operator, employee
+    observer employer
+
+    -- | Repay from the employer's payroll funds.
+    choice Advance_SettleFromPayroll : ContractId LendingMarket
+      with
+        payment   : ContractId Token        -- employer-owned, exactly principal + fee
+        marketCid : ContractId LendingMarket
+        lineCid   : ContractId AdvanceLine
+        period    : Text
+      controller employer
+      do
+        tok <- fetch payment
+        assertMsg "payment must equal principal + fee" (tok.amount == principal + fee && tok.owner == employer)
+        line <- fetch lineCid
+        assertMsg "line does not match" (line.employee == employee && line.employer == employer)
+        paid <- exercise payment Transfer with newOwner = operator
+        market' <- exercise marketCid Market_Receive with incoming = paid, principal
+        _ <- exercise lineCid AdvanceLine_Restore with amount = principal
+        _ <- create AdvanceRepaid with operator, employee, employer, principal, fee, period
+        pure market'
+
+template AdvanceRepaid
+  with
+    operator  : Party
+    employee  : Party
+    employer  : Party
+    principal : Decimal
+    fee       : Decimal
+    period    : Text
+  where
+    signatory operator, employee, employer
+
+data AdvanceToSettle = AdvanceToSettle
+  with
+    advanceCid : ContractId Advance
+    lineCid    : ContractId AdvanceLine
+  deriving (Eq, Show)
+
+-- | One signature: settle open advances, then run payroll with each
+-- employee's advance deducted from their line.
+template PayrollWithAdvances
+  with
+    employer  : Party
+    operator  : Party
+    poolId    : Text
+    auditors  : [Party]
+    runId     : Text
+    period    : Text
+    issuer    : Party
+    symbol    : Text
+    holdings  : [ContractId Token]
+    lines     : [PayLine]
+    advances  : [AdvanceToSettle]
+    marketCid : ContractId LendingMarket
+  where
+    signatory employer
+
+    choice PayrollWithAdvances_Run : ContractId PayrollAttestation
+      controller employer
+      do
+        (merged, balance) <- mergeHoldings issuer symbol holdings
+        let settle (cur, remaining, mkt, deductions) a = do
+              adv <- fetch a.advanceCid
+              assertMsg "advance belongs to another employer" (adv.employer == employer)
+              let owed = adv.principal + adv.fee
+              assertMsg "insufficient funds to settle advances" (owed <= remaining)
+              (piece, rest) <- takeExact (fromSomeNote "out of funds" cur) remaining owed
+              mkt' <- exercise a.advanceCid Advance_SettleFromPayroll with
+                payment = piece, marketCid = mkt, lineCid = a.lineCid, period
+              pure (rest, remaining - owed, mkt', (adv.employee, owed) :: deductions)
+        (rest, remaining, _, deductions) <- foldlA settle (Some merged, balance, marketCid, []) advances
+
+        let deductionFor who = sum [d | (e, d) <- deductions, e == who]
+            netLines = [l with amount = l.amount - deductionFor l.employee | l <- lines]
+        forA_ netLines \l -> assertMsg "advance larger than the employee's pay" (l.amount >= 0.0)
+        let payable = filter (\l -> l.amount > 0.0) netLines
+        assertMsg "nothing left to pay" (not (null payable))
+        assertMsg "no funds left for payroll" (remaining > 0.0)
+        -- hand the remaining funds to a regular payroll run, in this same transaction
+        order <- create PayrollOrder with
+          employer, operator, poolId, auditors, runId, period, issuer, symbol
+          holdings = optionalToList rest, lines = payable
+        exercise order PayrollOrder_Run

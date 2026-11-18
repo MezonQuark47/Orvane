@@ -1,0 +1,10 @@
+sdk-version: 3.7.3
+name: orvane-lending
+source: daml
+version: 0.1.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+data-dependencies:
+  - ../orvane-amm/.daml/dist/orvane-defi-amm-0.1.0.dar
+  - ../orvane-payments/.daml/dist/orvane-payments-0.1.0.dar

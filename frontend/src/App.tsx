@@ -6,6 +6,7 @@ import Holdings from './pages/Holdings.tsx'
 import Lens from './pages/Lens.tsx'
 import Liquidity from './pages/Liquidity.tsx'
 import Payments from './pages/Payments.tsx'
+import Lending from './pages/Lending.tsx'
 import Trade from './pages/Trade.tsx'
 
 const Vault = lazy(() => import('./three/Vault.tsx'))
@@ -14,6 +15,7 @@ const TABS = [
   { key: 'trade', label: 'Trade' },
   { key: 'liquidity', label: 'Liquidity' },
   { key: 'payments', label: 'Payments' },
+  { key: 'lending', label: 'Lending' },
   { key: 'lens', label: 'Privacy lens' },
   { key: 'holdings', label: 'Holdings' },
 ] as const
@@ -98,6 +100,7 @@ function Shell() {
               {tab === 'trade' && <Trade />}
               {tab === 'liquidity' && <Liquidity />}
               {tab === 'payments' && <Payments />}
+              {tab === 'lending' && <Lending />}
               {tab === 'lens' && <Lens />}
               {tab === 'holdings' && <Holdings />}
             </motion.div>

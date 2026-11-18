@@ -1,4 +1,5 @@
 packages:
   - ./orvane-amm
   - ./orvane-payments
+  - ./orvane-lending
   - ./orvane-amm-test

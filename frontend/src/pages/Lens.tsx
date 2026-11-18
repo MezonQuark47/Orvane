@@ -2,6 +2,16 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import { T, type LpShare, type Pool, type SwapReceipt, type Token } from '../../../shared/amm.ts'
 import { P, type Invoice, type PayoutPreference, type PayrollAttestation, type Payslip } from '../../../shared/payments.ts'
+import {
+  L,
+  type Advance,
+  type AdvanceLine,
+  type AdvanceRepaid,
+  type LendingMarket,
+  type Loan,
+  type LoanClosed,
+  type SupplyPosition,
+} from '../../../shared/lending.ts'
 import type { Contract } from '../../../shared/ledger.ts'
 import { useOrvane, type Persona } from '../ledger/OrvaneProvider.tsx'
 import { EyeIcon, fmt, fmtCompact } from '../ui/bits.tsx'
@@ -22,6 +32,13 @@ const ALL = [
   P.PaidInvoice,
   P.DisputedInvoice,
   P.InvoiceSettlement,
+  L.LendingMarket,
+  L.SupplyPosition,
+  L.Loan,
+  L.LoanClosed,
+  L.AdvanceLine,
+  L.Advance,
+  L.AdvanceRepaid,
 ]
 
 const short = (party: string) => party.split('::')[0]
@@ -76,6 +93,34 @@ function describe(c: Contract<unknown>, self: string): Row {
       const r = p as unknown as { employee: string; gross: string; receiveSymbol: string }
       return { cid: c.contractId, kind, title: `${fmt(+r.gross)} USDx → ${r.receiveSymbol}`, detail: `for ${short(r.employee)}` }
     }
+    case 'LendingMarket': {
+      const m = p as unknown as LendingMarket
+      return { cid: c.contractId, kind: 'Market', title: `${fmtCompact(+m.cash + +m.principalOut)} supplied`, detail: `${fmtCompact(+m.principalOut)} borrowed · totals only` }
+    }
+    case 'SupplyPosition': {
+      const s = p as unknown as SupplyPosition
+      return { cid: c.contractId, kind: 'Supply', title: `${fmt(+s.shares)} shares`, detail: `${short(s.owner)} · lender` }
+    }
+    case 'Loan': {
+      const l = p as unknown as Loan
+      return { cid: c.contractId, kind, title: `${fmt(+l.principal)} USDx`, detail: `${short(l.borrower)} · ${fmtCompact(+l.collateralAmount)} CCx locked` }
+    }
+    case 'LoanClosed': {
+      const l = p as unknown as LoanClosed
+      return { cid: c.contractId, kind, title: `${fmt(+l.principal)} USDx`, detail: l.liquidated ? 'liquidated' : 'repaid' }
+    }
+    case 'AdvanceLine': {
+      const l = p as unknown as AdvanceLine
+      return { cid: c.contractId, kind: 'AdvLine', title: `limit ${fmt(+l.limit, 0)} USDx`, detail: `for ${short(l.employee)}` }
+    }
+    case 'Advance': {
+      const a = p as unknown as Advance
+      return { cid: c.contractId, kind, title: `${fmt(+a.principal)} USDx`, detail: `${short(a.employee)} · wage advance` }
+    }
+    case 'AdvanceRepaid': {
+      const a = p as unknown as AdvanceRepaid
+      return { cid: c.contractId, kind: 'AdvRepaid', title: `${fmt(+a.principal + +a.fee)} USDx`, detail: `${short(a.employee)} · ${a.period}` }
+    }
     default:
       return { cid: c.contractId, kind, title: kind, detail: 'pending' }
   }
@@ -113,6 +158,13 @@ const ORDER = [
   'PaidInvoice',
   'DisputedInvoice',
   'PayoutRequest',
+  'Loan',
+  'Advance',
+  'AdvRepaid',
+  'LoanClosed',
+  'Supply',
+  'Market',
+  'AdvLine',
   'Pool',
   'SwapReceipt',
   'SwapRequest',

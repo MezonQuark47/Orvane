@@ -5,14 +5,16 @@ Private payments and DeFi on the Canton Network, written in Daml.
 Orvane is an open-source settlement layer for businesses that want to trade, pay and borrow
 on-ledger without exposing who paid whom or how much they hold.
 
-Status: prototype. Two modules are done and share one liquidity pool:
+Status: prototype on a local Canton sandbox. Three modules share one liquidity pool:
 
 - **Private AMM**: swaps and liquidity where nobody but the trader and operator sees a trade.
 - **Private payments**: payroll and B2B invoices. Employees see only their own payslip, the
   auditor sees totals only, and anyone can pay or be paid in the currency they prefer, with the
   conversion settled atomically through the pool.
+- **Private lending**: collateralized USDx loans against CCx, priced and liquidated through the
+  pool, plus earned-wage advances that are repaid automatically out of the next payroll.
 
-Collateralized lending is next. See the roadmap below.
+Next: DevNet deployment with the Loop wallet. See the roadmap below.
 
 ## Why Canton
 
@@ -68,12 +70,33 @@ suppliers can reissue.
 | Operator | Only payroll lines and invoices that need a currency conversion |
 | Supplier / buyer | Their shared invoices and payment proofs |
 
+## How lending works
+
+**Market.** Lenders supply USDx and receive shares whose value grows as borrowers pay interest.
+The borrow rate follows utilization (2% base + 18% × utilization). Members see the market's
+totals; market choices never carry a lender's or borrower's identity.
+
+**Loans.** A borrower locks CCx and borrows up to 60% of its value, priced from the AMM pool.
+The loan is visible to the borrower and the operator only. Repaying is a single signature that
+returns the collateral in the same transaction. If debt crosses 80% of the collateral's value,
+the operator's keeper liquidates: the collateral is sold through the pool and the market is
+repaid in one atomic transaction. Any shortfall is recorded as bad debt, never hidden.
+
+**Earned-wage advances.** The employer opens an `AdvanceLine` per employee. The employee draws an
+advance from the lending market (1% fee). At the next payroll, `PayrollWithAdvances` repays every
+open advance and pays everyone their net amount, all under the employer's one signature.
+Colleagues and lenders never see who took an advance.
+
+The demo market runs on a compressed clock (one year of interest per hour, set by
+`yearSeconds`) so interest is visible while you watch.
+
 ## Repository layout
 
 | Path | What it is |
 |---|---|
 | `daml/orvane-amm` | On-ledger contracts: `Token`, `Pool`, `LpShare`, `SwapOrder`, `SwapRequest`, `LiquidityOrder`, `AddLiquidityRequest`, `RemoveLiquidityRequest`, `SwapReceipt` |
 | `daml/orvane-payments` | Payroll (`PayrollOrder`, `Payslip`, `PayrollAttestation`, `PayoutPreference`, `PayoutRequest`) and invoices (`Invoice`, `InvoiceSettlement`, `PaidInvoice`, `DisputedInvoice`). Depends on `orvane-amm` |
+| `daml/orvane-lending` | Lending market (`LendingMarket`, `SupplyPosition`, `Loan`, borrow/supply orders) and wage advances (`AdvanceLine`, `Advance`, `PayrollWithAdvances`). Depends on both packages above |
 | `daml/orvane-amm-test` | Daml Script tests, kept in a separate package so test code is never uploaded to a validator |
 | `shared/` | TypeScript JSON Ledger API v2 client, contract types, command builders and pricing math, used by both the operator and the web app |
 | `operator/` | Node service that uploads the contracts, bootstraps a demo world and settles requests (no dependencies, Node 22.18+) |
@@ -122,7 +145,7 @@ You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com) and Java 17 or ne
 ./scripts/test.sh
 ```
 
-All 20 scripts should pass.
+All 29 scripts should pass.
 
 | Test | Checks |
 |---|---|
@@ -144,6 +167,14 @@ All 20 scripts should pass.
 | `test_invoicePaidConverted` | buyer pays in CCx, supplier gets exactly the USDx invoiced, refund is private again |
 | `test_invoiceConversionSlippage` | too-low maximum: invoice reopens, buyer keeps funds |
 | `test_invoiceDisputeAndReissue` | dispute and corrected reissue |
+| `test_supplyAndBorrowPrivately` | borrow within LTV; members see totals, the lender never sees the borrower |
+| `test_borrowAboveLimitRejected` | borrowing past 60% LTV fails |
+| `test_repayWithInterestAndLenderEarns` | a year of interest, collateral returned, lender withdraws principal + interest |
+| `test_healthyLoanCannotBeLiquidated` | the operator cannot liquidate a safe loan |
+| `test_liquidationThroughThePool` | price crash, collateral sold through the AMM, bad debt recorded |
+| `test_addCollateral` | topping up collateral |
+| `test_advanceRepaidFromPayroll` | advance drawn, then repaid out of payroll under one signature |
+| `test_advanceLimits` | above-limit and second open advance are rejected |
 
 ## Roadmap
 
@@ -152,7 +183,7 @@ All 20 scripts should pass.
 3. Operator service that settles requests through the Ledger API (done, local sandbox)
 4. DevNet deployment with Canton Coin and CIP-56 token standard assets
 5. Payments: private payroll and B2B invoices settled through the pool (done, local sandbox)
-6. Lending: collateralized credit lines and earned-wage advances funded by pool liquidity
+6. Lending: collateralized loans with pool-priced liquidation and earned-wage advances (done, local sandbox)
 
 ## License
 

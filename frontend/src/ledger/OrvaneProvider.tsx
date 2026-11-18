@@ -22,6 +22,7 @@ export interface Persona {
 
 export interface Config {
   poolId: string
+  marketId: string
   operator: string
   issuers: { USDx: string; CCx: string }
   business: { employer: string; supplier: string; auditor: string; employees: string[] }
