@@ -116,6 +116,16 @@ export class JsonLedger {
     return r.partyDetails.party
   }
 
+  // Upload a DAR. Uploading a package that is already loaded is a no-op.
+  async uploadDar(bytes: Uint8Array): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/v2/packages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: bytes,
+    })
+    if (!res.ok) throw new LedgerError(res.status, await res.text())
+  }
+
   async query<T>(party: string, templateIds: string[]): Promise<Contract<T>[]> {
     const activeAtOffset = await this.ledgerEnd()
     const rows = await this.call<Array<{ contractEntry: { JsActiveContract?: { createdEvent: CreatedEvent } } }>>(

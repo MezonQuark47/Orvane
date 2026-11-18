@@ -1,0 +1,184 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Private payroll.
+--
+-- Who sees what:
+--   * Each employee sees only their own Payslip.
+--   * The auditor sees a PayrollAttestation: period, headcount and total.
+--     No names, no individual amounts.
+--   * The pool operator only learns about lines that need a currency
+--     conversion, never about the rest of the payroll.
+--
+-- One signature from the employer pays everyone. Same-currency lines settle
+-- in that transaction; conversion lines are handed to the operator, which
+-- swaps through the pool and pays the employee atomically. If a conversion
+-- can't be filled, the employee is paid in the original currency instead.
+module Orvane.Payroll where
+
+import DA.Action (foldlA)
+import Orvane.Amm (Pool(..), Pool_Swap(..))
+import Orvane.Pay.Util
+import Orvane.Token
+
+-- | An employee's standing choice of payout currency. Visible to the employer.
+template PayoutPreference
+  with
+    employee : Party
+    employer : Party
+    symbol   : Text
+  where
+    signatory employee
+    observer employer
+
+    choice PayoutPreference_Change : ContractId PayoutPreference
+      with
+        newSymbol : Text
+      controller employee
+      do create this with symbol = newSymbol
+
+data PayLine = PayLine
+  with
+    employee      : Party
+    amount        : Decimal  -- gross, in the payroll currency
+    receiveSymbol : Text     -- what the employee wants to receive
+    minReceive    : Decimal  -- slippage floor when a conversion is needed
+  deriving (Eq, Show)
+
+-- | The employee's private pay record.
+template Payslip
+  with
+    employer       : Party
+    employee       : Party
+    runId          : Text
+    period         : Text
+    gross          : Decimal
+    paySymbol      : Text
+    received       : Decimal
+    receivedSymbol : Text
+    note           : Text
+    paidAt         : Time
+  where
+    signatory employer
+    observer employee
+
+-- | What the auditor gets: totals only.
+template PayrollAttestation
+  with
+    employer  : Party
+    auditors  : [Party]
+    runId     : Text
+    period    : Text
+    headcount : Int
+    total     : Decimal
+    symbol    : Text
+    converted : Int
+    paidAt    : Time
+  where
+    signatory employer
+    observer auditors
+
+-- | A conversion line waiting for the operator. Only employer + operator see it.
+template PayoutRequest
+  with
+    employer      : Party
+    operator      : Party
+    employee      : Party
+    poolId        : Text
+    runId         : Text
+    period        : Text
+    inputCid      : ContractId Token
+    gross         : Decimal
+    paySymbol     : Text
+    receiveSymbol : Text
+    minReceive    : Decimal
+  where
+    signatory employer
+    observer operator
+
+    choice PayoutRequest_Execute : ContractId Payslip
+      with
+        poolCid : ContractId Pool
+      controller operator
+      do
+        pool <- fetch poolCid
+        assertMsg "wrong pool" (pool.poolId == poolId && pool.operator == operator)
+        input <- fetch inputCid
+        let (_, outSymbol) = counterAsset pool input.issuer input.symbol
+        assertMsg "pool does not convert into the requested currency" (outSymbol == receiveSymbol)
+        inOp <- exercise inputCid Transfer with newOwner = operator
+        (_, outCid, outAmt) <- exercise poolCid Pool_Swap with inCid = inOp, minOut = minReceive
+        _ <- exercise outCid Transfer with newOwner = employee
+        now <- getTime
+        create Payslip with
+          employer, employee, runId, period, gross, paySymbol
+          received = outAmt, receivedSymbol = receiveSymbol
+          note = "converted through pool " <> poolId
+          paidAt = now
+
+    -- | Conversion couldn't be filled: pay in the payroll currency instead.
+    choice PayoutRequest_Fallback : ContractId Payslip
+      with
+        reason : Text
+      controller operator
+      do
+        _ <- exercise inputCid Transfer with newOwner = employee
+        now <- getTime
+        create Payslip with
+          employer, employee, runId, period, gross, paySymbol
+          received = gross, receivedSymbol = paySymbol
+          note = "paid in " <> paySymbol <> ": " <> reason
+          paidAt = now
+
+-- | One-signature payroll. createAndExercise PayrollOrder_Run.
+template PayrollOrder
+  with
+    employer : Party
+    operator : Party
+    poolId   : Text
+    auditors : [Party]
+    runId    : Text
+    period   : Text
+    issuer   : Party
+    symbol   : Text
+    holdings : [ContractId Token]
+    lines    : [PayLine]
+  where
+    signatory employer
+
+    choice PayrollOrder_Run : ContractId PayrollAttestation
+      controller employer
+      do
+        assertMsg "payroll has no lines" (not (null lines))
+        assertMsg "every line needs a positive amount" (all (\l -> l.amount > 0.0) lines)
+        let total = sum (map (.amount) lines)
+        (merged, balance) <- mergeHoldings issuer symbol holdings
+        assertMsg "insufficient balance for payroll" (balance >= total)
+        now <- getTime
+
+        let payLine (current, remaining, converted) line = do
+              (piece, rest) <- takeExact (fromSome' current) remaining line.amount
+              if line.receiveSymbol == symbol then do
+                _ <- exercise piece Transfer with newOwner = line.employee
+                _ <- create Payslip with
+                  employer, employee = line.employee, runId, period
+                  gross = line.amount, paySymbol = symbol
+                  received = line.amount, receivedSymbol = symbol
+                  note = "", paidAt = now
+                pure (rest, remaining - line.amount, converted)
+              else do
+                disclosed <- exercise piece Disclose with party = operator
+                _ <- create PayoutRequest with
+                  employer, operator, employee = line.employee, poolId, runId, period
+                  inputCid = disclosed, gross = line.amount, paySymbol = symbol
+                  receiveSymbol = line.receiveSymbol, minReceive = line.minReceive
+                pure (rest, remaining - line.amount, converted + 1)
+
+        (_, _, converted) <- foldlA payLine (Some merged, balance, 0) lines
+        create PayrollAttestation with
+          employer, auditors, runId, period
+          headcount = length lines, total, symbol, converted, paidAt = now
+
+fromSome' : Optional a -> a
+fromSome' (Some x) = x
+fromSome' None = error "ran out of funds while paying lines"

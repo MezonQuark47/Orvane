@@ -6,6 +6,7 @@ import '@fontsource-variable/bricolage-grotesque'
 import '@fontsource/martian-mono/300.css'
 import '@fontsource/martian-mono/400.css'
 import './index.css'
+import './payments.css'
 import App from './App.tsx'
 
 createRoot(document.getElementById('root')!).render(

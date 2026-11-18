@@ -5,9 +5,14 @@ Private payments and DeFi on the Canton Network, written in Daml.
 Orvane is an open-source settlement layer for businesses that want to trade, pay and borrow
 on-ledger without exposing who paid whom or how much they hold.
 
-Status: early prototype. Module 1 (a private AMM) is done. Payments (B2B, payroll, stablecoin
-transfers) and collateralized lending will be built on top of the same liquidity pool. See the
-roadmap below.
+Status: prototype. Two modules are done and share one liquidity pool:
+
+- **Private AMM**: swaps and liquidity where nobody but the trader and operator sees a trade.
+- **Private payments**: payroll and B2B invoices. Employees see only their own payslip, the
+  auditor sees totals only, and anyone can pay or be paid in the currency they prefer, with the
+  conversion settled atomically through the pool.
+
+Collateralized lending is next. See the roadmap below.
 
 ## Why Canton
 
@@ -40,14 +45,38 @@ Wallets only ever sign one command per action: `SwapOrder_Place` / `LiquidityOrd
 the user's holdings, carve out the exact amount, disclose it to the operator and file the request
 in a single transaction.
 
+## How payments work
+
+**Payroll.** The employer signs one `PayrollOrder_Run`. In that transaction every employee paid
+in the payroll currency gets their funds and a `Payslip` that only they (and the employer) can
+read, and the auditor gets a `PayrollAttestation` with period, headcount and total. Employees
+who asked to be paid in another currency (`PayoutPreference`) get a `PayoutRequest` that the
+operator settles through the pool. The operator only ever sees those lines. If the conversion
+can't be filled within the employer's slippage limit, the employee is paid in the original
+currency instead, so nobody goes unpaid.
+
+**Invoices.** A supplier's `Invoice` is visible to the supplier and buyer only. Paying in the
+invoice currency settles directly between the two of them. Paying in another currency creates an
+`InvoiceSettlement`; the operator swaps exactly enough to cover the invoice, the supplier
+receives the exact invoiced amount, and unused input goes back to the buyer. Buyers can dispute,
+suppliers can reissue.
+
+| Party | Can see |
+|---|---|
+| Employee | Their own payslips and payout preference |
+| Auditor | Payroll totals (period, headcount, sum), no names or amounts |
+| Operator | Only payroll lines and invoices that need a currency conversion |
+| Supplier / buyer | Their shared invoices and payment proofs |
+
 ## Repository layout
 
 | Path | What it is |
 |---|---|
 | `daml/orvane-amm` | On-ledger contracts: `Token`, `Pool`, `LpShare`, `SwapOrder`, `SwapRequest`, `LiquidityOrder`, `AddLiquidityRequest`, `RemoveLiquidityRequest`, `SwapReceipt` |
+| `daml/orvane-payments` | Payroll (`PayrollOrder`, `Payslip`, `PayrollAttestation`, `PayoutPreference`, `PayoutRequest`) and invoices (`Invoice`, `InvoiceSettlement`, `PaidInvoice`, `DisputedInvoice`). Depends on `orvane-amm` |
 | `daml/orvane-amm-test` | Daml Script tests, kept in a separate package so test code is never uploaded to a validator |
 | `shared/` | TypeScript JSON Ledger API v2 client, contract types, command builders and pricing math, used by both the operator and the web app |
-| `operator/` | Node service that bootstraps a demo pool and settles requests (no dependencies, Node 22.18+) |
+| `operator/` | Node service that uploads the contracts, bootstraps a demo world and settles requests (no dependencies, Node 22.18+) |
 | `frontend/` | React web app: React Three Fiber scene, Motion, Radix UI, Five North Loop SDK |
 
 Design notes:
@@ -76,8 +105,9 @@ cd operator && npm start
 cd frontend && npm install && npm run dev
 ```
 
-In the app, use "Act as" to switch between Alice (liquidity provider), Bob (trader) and Carol
-(pool member). The Privacy lens tab shows, live, which contracts each of them can see.
+In the app, use "Act as" to switch between Alice (liquidity provider), Bob (trader), Carol
+(pool member), Acme (employer and buyer), Nova (supplier) and the Auditor. The Privacy lens tab
+shows, live, which contracts each of them can see.
 The sandbox is in-memory, so restarting it resets the demo.
 
 ## Running the tests
@@ -92,7 +122,7 @@ You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com) and Java 17 or ne
 ./scripts/test.sh
 ```
 
-All 11 scripts should pass.
+All 20 scripts should pass.
 
 | Test | Checks |
 |---|---|
@@ -106,6 +136,14 @@ All 11 scripts should pass.
 | `test_swapOrderSingleSignature` | one signature merges holdings, swaps the exact amount, change stays private |
 | `test_swapOrderInsufficientBalance` | ordering more than you hold fails |
 | `test_liquidityOrder` | one-signature deposit mints an LP share |
+| `test_payrollSameCurrency` | one signature pays three people; each sees only their payslip, the auditor only the total |
+| `test_payrollConversion` | a CCx line goes through the pool; the operator never sees the other lines |
+| `test_payrollConversionFallback` | a failed conversion still pays the employee, in USDx |
+| `test_payrollInsufficientFunds` | payroll larger than the balance is rejected |
+| `test_invoicePaidDirect` | same-currency payment; operator and outsiders never see the invoice |
+| `test_invoicePaidConverted` | buyer pays in CCx, supplier gets exactly the USDx invoiced, refund is private again |
+| `test_invoiceConversionSlippage` | too-low maximum: invoice reopens, buyer keeps funds |
+| `test_invoiceDisputeAndReissue` | dispute and corrected reissue |
 
 ## Roadmap
 
@@ -113,7 +151,7 @@ All 11 scripts should pass.
 2. Web app: React with [Loop SDK](https://docs.fivenorth.io/loop-sdk/overview/) wallet connection (done, local sandbox)
 3. Operator service that settles requests through the Ledger API (done, local sandbox)
 4. DevNet deployment with Canton Coin and CIP-56 token standard assets
-5. Payments: private B2B payments and payroll batches settled through the pool
+5. Payments: private payroll and B2B invoices settled through the pool (done, local sandbox)
 6. Lending: collateralized credit lines and earned-wage advances funded by pool liquidity
 
 ## License

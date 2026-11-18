@@ -1,13 +1,30 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import { T, type LpShare, type Pool, type SwapReceipt, type Token } from '../../../shared/amm.ts'
+import { P, type Invoice, type PayoutPreference, type PayrollAttestation, type Payslip } from '../../../shared/payments.ts'
 import type { Contract } from '../../../shared/ledger.ts'
 import { useOrvane, type Persona } from '../ledger/OrvaneProvider.tsx'
 import { EyeIcon, fmt, fmtCompact } from '../ui/bits.tsx'
 
 type Row = { cid: string; kind: string; title: string; detail: string }
 
-const ALL = [T.Token, T.Pool, T.LpShare, T.SwapReceipt, T.SwapRequest]
+const ALL = [
+  T.Token,
+  T.Pool,
+  T.LpShare,
+  T.SwapReceipt,
+  T.SwapRequest,
+  P.Payslip,
+  P.PayrollAttestation,
+  P.PayoutRequest,
+  P.PayoutPreference,
+  P.Invoice,
+  P.PaidInvoice,
+  P.DisputedInvoice,
+  P.InvoiceSettlement,
+]
+
+const short = (party: string) => party.split('::')[0]
 
 function describe(c: Contract<unknown>, self: string): Row {
   const kind = c.templateId.split(':').pop()!
@@ -29,6 +46,35 @@ function describe(c: Contract<unknown>, self: string): Row {
     case 'SwapReceipt': {
       const r = p as unknown as SwapReceipt
       return { cid: c.contractId, kind, title: `${fmt(+r.amountIn)} ${r.symbolIn} → ${fmt(+r.amountOut, 2)} ${r.symbolOut}`, detail: 'trade receipt' }
+    }
+    case 'Payslip': {
+      const s = p as unknown as Payslip
+      return { cid: c.contractId, kind, title: `${fmt(+s.received)} ${s.receivedSymbol}`, detail: `${short(s.employee)} · ${s.period}` }
+    }
+    case 'PayrollAttestation': {
+      const a = p as unknown as PayrollAttestation
+      return { cid: c.contractId, kind: 'Attestation', title: `${fmt(+a.total)} ${a.symbol} · ${a.headcount} people`, detail: a.period }
+    }
+    case 'PayoutPreference': {
+      const pr = p as unknown as PayoutPreference
+      return { cid: c.contractId, kind: 'Preference', title: `${short(pr.employee)} → ${pr.symbol}`, detail: 'payout currency' }
+    }
+    case 'Invoice':
+    case 'PaidInvoice':
+    case 'DisputedInvoice':
+    case 'InvoiceSettlement': {
+      const inv = p as unknown as Invoice
+      const state = { Invoice: 'open', PaidInvoice: 'paid', DisputedInvoice: 'disputed', InvoiceSettlement: 'converting' }[kind]
+      return {
+        cid: c.contractId,
+        kind,
+        title: `${inv.terms.invoiceNo} · ${fmt(+inv.terms.amount)} ${inv.terms.symbol}`,
+        detail: `${short(inv.supplier)} → ${short(inv.buyer)} · ${state}`,
+      }
+    }
+    case 'PayoutRequest': {
+      const r = p as unknown as { employee: string; gross: string; receiveSymbol: string }
+      return { cid: c.contractId, kind, title: `${fmt(+r.gross)} USDx → ${r.receiveSymbol}`, detail: `for ${short(r.employee)}` }
     }
     default:
       return { cid: c.contractId, kind, title: kind, detail: 'pending' }
@@ -59,11 +105,34 @@ function useView(persona: Persona) {
   return rows
 }
 
-const order = (k: string) => ['Pool', 'SwapReceipt', 'SwapRequest', 'LpShare', 'Token'].indexOf(k)
+const ORDER = [
+  'Attestation',
+  'Payslip',
+  'Invoice',
+  'InvoiceSettlement',
+  'PaidInvoice',
+  'DisputedInvoice',
+  'PayoutRequest',
+  'Pool',
+  'SwapReceipt',
+  'SwapRequest',
+  'LpShare',
+  'Preference',
+  'Token',
+]
+const order = (k: string) => ORDER.indexOf(k)
+
+const MAX_COLUMNS = 3
 
 export default function Lens() {
   const { config, persona } = useOrvane()
+  const [picked, setPicked] = useState<string[]>(() =>
+    persona?.group === 'business' ? ['acme', 'bob', 'auditor'] : ['alice', 'bob', 'carol'],
+  )
   if (!config) return null
+  const toggle = (key: string) =>
+    setPicked((cur) => (cur.includes(key) ? (cur.length > 1 ? cur.filter((k) => k !== key) : cur) : [...cur, key].slice(-MAX_COLUMNS)))
+  const columns = config.personas.filter((p) => picked.includes(p.key))
   return (
     <div className="page page-lens">
       <header className="lens-head">
@@ -73,11 +142,19 @@ export default function Lens() {
         </h1>
         <p className="lede">
           These are the contracts each participant's node actually holds right now. Make a trade as one persona and watch the other columns:
-          they see the pool move, and nothing about you.
+          they see the pool move, and nothing about you. Run payroll as Acme and compare an employee with the auditor.
         </p>
+        <div className="lens-pick" role="group" aria-label="Personas to compare">
+          {config.personas.map((p) => (
+            <button key={p.key} className={picked.includes(p.key) ? 'on' : ''} aria-pressed={picked.includes(p.key)} onClick={() => toggle(p.key)}>
+              <span className={`avatar sm av-${p.key} ${p.group === 'business' ? 'org' : ''}`}>{p.key === 'auditor' ? '§' : p.name[0]}</span>
+              {p.name}
+            </button>
+          ))}
+        </div>
       </header>
       <div className="lens-grid">
-        {config.personas.map((p, i) => (
+        {columns.map((p, i) => (
           <Column key={p.key} persona={p} index={i} active={p.key === persona?.key} />
         ))}
       </div>
@@ -96,7 +173,9 @@ function Column({ persona, index, active }: { persona: Persona; index: number; a
       transition={{ duration: 0.8, delay: 0.1 + index * 0.1, ease: [0.16, 1, 0.3, 1] }}
     >
       <header>
-        <span className={`avatar av-${persona.key}`}>{persona.name[0]}</span>
+        <span className={`avatar av-${persona.key} ${persona.group === 'business' ? 'org' : ''}`}>
+          {persona.key === 'auditor' ? '§' : persona.name[0]}
+        </span>
         <div>
           <h3>{persona.name}</h3>
           <span className="muted small">{persona.role}</span>

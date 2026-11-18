@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { JsonLedger, LedgerError, type Contract } from '../../../shared/ledger.ts'
+import { JsonLedger, LedgerError, type Contract, type DamlCommand } from '../../../shared/ledger.ts'
 import {
   T,
   placeLiquidity,
@@ -17,12 +17,14 @@ export interface Persona {
   name: string
   role: string
   party: string
+  group: 'market' | 'business'
 }
 
-interface Config {
+export interface Config {
   poolId: string
   operator: string
   issuers: { USDx: string; CCx: string }
+  business: { employer: string; supplier: string; auditor: string; employees: string[] }
   personas: Persona[]
 }
 
@@ -78,6 +80,10 @@ interface OrvaneState {
   faucet: () => Promise<void>
   pulse: { id: number; from: Symbol } | null
   ledger: JsonLedger
+  // Submit commands as the current persona.
+  submit: (commands: DamlCommand[]) => Promise<void>
+  holdingsFor: (sym: Symbol) => string[]
+  refresh: () => Promise<void>
 }
 
 const Ctx = createContext<OrvaneState | null>(null)
@@ -353,6 +359,12 @@ export function OrvaneProvider({ children }: { children: ReactNode }) {
     faucet,
     pulse,
     ledger,
+    submit: async (commands) => {
+      await ledger.submit([party!], commands)
+      await refresh()
+    },
+    holdingsFor,
+    refresh,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

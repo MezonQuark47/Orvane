@@ -1,0 +1,204 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+module Test.PaymentsTest where
+
+import DA.Assert
+import DA.Date (Month(..), date)
+import DA.Foldable (forA_)
+import DA.Optional (isNone)
+import Daml.Script
+
+import Orvane.Invoice
+import Orvane.Math (getAmountOut)
+import Orvane.Pay.Util (getAmountIn)
+import Orvane.Payroll
+import Orvane.Token
+import Test.AmmTest (World(..), mint, seedLiquidity, setup)
+
+data Biz = Biz with
+    w : World
+    acme : Party     -- employer, and buyer of invoices
+    nova : Party     -- supplier
+    auditor : Party
+
+bizSetup : Script Biz
+bizSetup = do
+  w0 <- setup
+  (w, _) <- seedLiquidity w0
+  acme <- allocateParty "Acme"
+  nova <- allocateParty "Nova"
+  auditor <- allocateParty "Auditor"
+  pure Biz with ..
+
+balance : Party -> Party -> Text -> Script Decimal
+balance owner issuer symbol = do
+  toks <- query @Token owner
+  pure $ sum [t.amount | (_, t) <- toks, t.owner == owner, t.issuer == issuer, t.symbol == symbol]
+
+runPayroll : Biz -> [ContractId Token] -> [PayLine] -> Script (ContractId PayrollAttestation)
+runPayroll b holdings lines =
+  submit b.acme do
+    createAndExerciseCmd
+      (PayrollOrder with
+        employer = b.acme, operator = b.w.operator, poolId = "USDx-CCx"
+        auditors = [b.auditor], runId = "2026-11", period = "November 2026"
+        issuer = b.w.usdIssuer, symbol = "USDx", holdings, lines)
+      PayrollOrder_Run
+
+line : Party -> Decimal -> PayLine
+line who amt = PayLine with employee = who, amount = amt, receiveSymbol = "USDx", minReceive = 0.0
+
+test_payrollSameCurrency : Script ()
+test_payrollSameCurrency = do
+  b <- bizSetup
+  let w = b.w
+  funds <- mint w.usdIssuer b.acme "USDx" 10000.0
+  att <- runPayroll b [funds] [line w.alice 3000.0, line w.bob 2500.0, line w.carol 4200.0]
+
+  bobUsd <- balance w.bob w.usdIssuer "USDx"
+  bobUsd === 2500.0
+  carolUsd <- balance w.carol w.usdIssuer "USDx"
+  carolUsd === 4200.0
+  change <- balance b.acme w.usdIssuer "USDx"
+  change === 300.0
+
+  -- every employee sees exactly one payslip: their own
+  forA_ [(w.alice, 3000.0), (w.bob, 2500.0), (w.carol, 4200.0)] \(who, gross) -> do
+    slips <- query @Payslip who
+    map (\(_, s) -> (s.employee, s.gross)) slips === [(who, gross)]
+
+  -- the auditor sees the totals and nothing else
+  Some a <- queryContractId b.auditor att
+  (a.headcount, a.total, a.converted) === (3, 9700.0, 0)
+  auditorSlips <- query @Payslip b.auditor
+  length auditorSlips === 0
+  -- the pool operator wasn't involved at all
+  opSlips <- query @Payslip w.operator
+  length opSlips === 0
+
+test_payrollConversion : Script ()
+test_payrollConversion = do
+  b <- bizSetup
+  let w = b.w
+  funds <- mint w.usdIssuer b.acme "USDx" 6000.0
+  let expected = getAmountOut 30.0 2500.0 10000.0 50000.0
+  _ <- runPayroll b [funds]
+    [ line w.alice 3000.0
+    , PayLine with employee = w.bob, amount = 2500.0, receiveSymbol = "CCx", minReceive = expected ]
+  -- the operator sees only bob's line
+  reqs <- query @PayoutRequest w.operator
+  map (\(_, r) -> r.employee) reqs === [w.bob]
+  let [(reqCid, _)] = reqs
+  submit w.operator do exerciseCmd reqCid PayoutRequest_Execute with poolCid = w.poolCid
+  bobCc <- balance w.bob w.ccIssuer "CCx"
+  bobCc === expected
+  [(_, slip)] <- query @Payslip w.bob
+  (slip.gross, slip.receivedSymbol, slip.received) === (2500.0, "CCx", expected)
+  -- alice's slip never reached the operator
+  opSlips <- query @Payslip w.operator
+  length opSlips === 0
+
+test_payrollConversionFallback : Script ()
+test_payrollConversionFallback = do
+  b <- bizSetup
+  let w = b.w
+  funds <- mint w.usdIssuer b.acme "USDx" 2500.0
+  _ <- runPayroll b [funds]
+    [PayLine with employee = w.bob, amount = 2500.0, receiveSymbol = "CCx", minReceive = 999999.0]
+  [(reqCid, _)] <- query @PayoutRequest w.operator
+  submitMustFail w.operator do exerciseCmd reqCid PayoutRequest_Execute with poolCid = w.poolCid
+  submit w.operator do exerciseCmd reqCid PayoutRequest_Fallback with reason = "price moved"
+  bobUsd <- balance w.bob w.usdIssuer "USDx"
+  bobUsd === 2500.0
+  [(_, slip)] <- query @Payslip w.bob
+  slip.receivedSymbol === "USDx"
+
+test_payrollInsufficientFunds : Script ()
+test_payrollInsufficientFunds = do
+  b <- bizSetup
+  funds <- mint b.w.usdIssuer b.acme "USDx" 100.0
+  submitMustFail b.acme do
+    createAndExerciseCmd
+      (PayrollOrder with
+        employer = b.acme, operator = b.w.operator, poolId = "USDx-CCx"
+        auditors = [], runId = "x", period = "x"
+        issuer = b.w.usdIssuer, symbol = "USDx", holdings = [funds]
+        lines = [line b.w.bob 101.0])
+      PayrollOrder_Run
+
+invoiceTerms : Biz -> Decimal -> InvoiceTerms
+invoiceTerms b amt = InvoiceTerms with
+  invoiceNo = "INV-0042", memo = "Pallets, November"
+  amount = amt, issuer = b.w.usdIssuer, symbol = "USDx"
+  dueDate = date 2026 Dec 18
+
+test_invoicePaidDirect : Script ()
+test_invoicePaidDirect = do
+  b <- bizSetup
+  let w = b.w
+  inv <- submit b.nova do createCmd Invoice with supplier = b.nova, buyer = b.acme, terms = invoiceTerms b 1200.0
+  -- outsiders can't see the invoice
+  carolSees <- queryContractId w.carol inv
+  assertMsg "carol must not see the invoice" (isNone carolSees)
+  opSees <- queryContractId w.operator inv
+  assertMsg "operator must not see a same-currency invoice" (isNone opSees)
+  funds <- mint w.usdIssuer b.acme "USDx" 2000.0
+  paid <- submit b.acme do exerciseCmd inv Invoice_Pay with holdings = [funds]
+  novaUsd <- balance b.nova w.usdIssuer "USDx"
+  novaUsd === 1200.0
+  acmeUsd <- balance b.acme w.usdIssuer "USDx"
+  acmeUsd === 800.0
+  Some p <- queryContractId b.nova paid
+  p.converted === False
+  Some _ <- queryContractId b.acme paid
+  pure ()
+
+test_invoicePaidConverted : Script ()
+test_invoicePaidConverted = do
+  b <- bizSetup
+  let w = b.w
+  inv <- submit b.nova do createCmd Invoice with supplier = b.nova, buyer = b.acme, terms = invoiceTerms b 1200.0
+  cc <- mint w.ccIssuer b.acme "CCx" 10000.0
+  let needIn = getAmountIn 30.0 1200.0 50000.0 10000.0
+  settlement <- submit b.acme do
+    exerciseCmd inv Invoice_PayConverted with
+      operator = w.operator, poolId = "USDx-CCx", holdings = [cc], maxIn = needIn * 1.01
+  paid <- submit w.operator do exerciseCmd settlement InvoiceSettlement_Execute with poolCid = w.poolCid
+  -- the supplier gets exactly the invoiced amount in the invoice currency
+  novaUsd <- balance b.nova w.usdIssuer "USDx"
+  novaUsd === 1200.0
+  -- the buyer spent only what the conversion needed
+  acmeCc <- balance b.acme w.ccIssuer "CCx"
+  acmeCc === 10000.0 - needIn
+  Some p <- queryContractId b.acme paid
+  (p.converted, p.paidSymbol, p.paidAmount) === (True, "CCx", needIn)
+  -- refunded holdings are no longer disclosed to the operator
+  toks <- query @Token b.acme
+  assertMsg "refund is private again" (all (\(_, t) -> null t.observers) toks)
+
+test_invoiceConversionSlippage : Script ()
+test_invoiceConversionSlippage = do
+  b <- bizSetup
+  let w = b.w
+  inv <- submit b.nova do createCmd Invoice with supplier = b.nova, buyer = b.acme, terms = invoiceTerms b 1200.0
+  cc <- mint w.ccIssuer b.acme "CCx" 10000.0
+  settlement <- submit b.acme do
+    exerciseCmd inv Invoice_PayConverted with
+      operator = w.operator, poolId = "USDx-CCx", holdings = [cc], maxIn = 100.0
+  submitMustFail w.operator do exerciseCmd settlement InvoiceSettlement_Execute with poolCid = w.poolCid
+  reopened <- submit w.operator do exerciseCmd settlement InvoiceSettlement_Reject with reason = "max input too low"
+  Some again <- queryContractId b.acme reopened
+  again.terms.amount === 1200.0
+  acmeCc <- balance b.acme w.ccIssuer "CCx"
+  acmeCc === 10000.0
+
+test_invoiceDisputeAndReissue : Script ()
+test_invoiceDisputeAndReissue = do
+  b <- bizSetup
+  inv <- submit b.nova do createCmd Invoice with supplier = b.nova, buyer = b.acme, terms = invoiceTerms b 1200.0
+  disputed <- submit b.acme do exerciseCmd inv Invoice_Dispute with reason = "we received 90 pallets, not 100"
+  fixed <- submit b.nova do
+    exerciseCmd disputed DisputedInvoice_Reissue with newTerms = (invoiceTerms b 1080.0) with invoiceNo = "INV-0042-R1"
+  Some i <- queryContractId b.acme fixed
+  (i.terms.invoiceNo, i.terms.amount) === ("INV-0042-R1", 1080.0)

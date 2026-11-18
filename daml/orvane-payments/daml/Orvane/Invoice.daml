@@ -1,0 +1,157 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Private B2B invoices.
+--
+-- An invoice is visible to the supplier and the buyer only. The buyer can pay
+-- in the invoice currency (settles directly, no third party involved) or in
+-- another currency. In the second case the operator converts through the
+-- pool: the supplier always receives exactly the invoiced amount, and any
+-- unused input or rounding dust goes back to the buyer.
+module Orvane.Invoice where
+
+import DA.Foldable (forA_)
+import Orvane.Amm (Pool(..), Pool_Swap(..), prepareInput)
+import Orvane.Pay.Util
+import Orvane.Token
+
+data InvoiceTerms = InvoiceTerms
+  with
+    invoiceNo : Text
+    memo      : Text
+    amount    : Decimal
+    issuer    : Party   -- issuer of the currency the invoice is due in
+    symbol    : Text
+    dueDate   : Date
+  deriving (Eq, Show)
+
+template Invoice
+  with
+    supplier : Party
+    buyer    : Party
+    terms    : InvoiceTerms
+  where
+    signatory supplier
+    observer buyer
+    ensure terms.amount > 0.0 && terms.invoiceNo /= ""
+
+    -- | Pay in the invoice currency. Only supplier and buyer are involved.
+    choice Invoice_Pay : ContractId PaidInvoice
+      with
+        holdings : [ContractId Token]
+      controller buyer
+      do
+        (merged, balance) <- mergeHoldings terms.issuer terms.symbol holdings
+        assertMsg "insufficient balance" (balance >= terms.amount)
+        (exact, _) <- takeExact merged balance terms.amount
+        _ <- exercise exact Transfer with newOwner = supplier
+        now <- getTime
+        create PaidInvoice with
+          supplier, buyer, terms
+          paidSymbol = terms.symbol, paidAmount = terms.amount
+          converted = False, paidAt = now
+
+    -- | Pay in another currency, converted by the pool operator. `maxIn` caps
+    -- what the buyer is willing to spend.
+    choice Invoice_PayConverted : ContractId InvoiceSettlement
+      with
+        operator : Party
+        poolId   : Text
+        holdings : [ContractId Token]
+        maxIn    : Decimal
+      controller buyer
+      do
+        inputCid <- prepareInput operator holdings maxIn
+        create InvoiceSettlement with supplier, buyer, operator, poolId, terms, inputCid, maxIn
+
+    choice Invoice_Dispute : ContractId DisputedInvoice
+      with
+        reason : Text
+      controller buyer
+      do create DisputedInvoice with supplier, buyer, terms, reason
+
+    choice Invoice_Withdraw : ()
+      controller supplier
+      do pure ()
+
+-- | Proof of payment, held by both sides.
+template PaidInvoice
+  with
+    supplier   : Party
+    buyer      : Party
+    terms      : InvoiceTerms
+    paidSymbol : Text
+    paidAmount : Decimal
+    converted  : Bool
+    paidAt     : Time
+  where
+    signatory supplier, buyer
+
+template DisputedInvoice
+  with
+    supplier : Party
+    buyer    : Party
+    terms    : InvoiceTerms
+    reason   : Text
+  where
+    signatory supplier, buyer
+
+    -- | Supplier reissues with corrected terms.
+    choice DisputedInvoice_Reissue : ContractId Invoice
+      with
+        newTerms : InvoiceTerms
+      controller supplier
+      do create Invoice with supplier, buyer, terms = newTerms
+
+-- | A cross-currency payment waiting for the operator. Seen by supplier, buyer
+-- and operator only.
+template InvoiceSettlement
+  with
+    supplier : Party
+    buyer    : Party
+    operator : Party
+    poolId   : Text
+    terms    : InvoiceTerms
+    inputCid : ContractId Token
+    maxIn    : Decimal
+  where
+    signatory supplier, buyer
+    observer operator
+
+    choice InvoiceSettlement_Execute : ContractId PaidInvoice
+      with
+        poolCid : ContractId Pool
+      controller operator
+      do
+        pool <- fetch poolCid
+        assertMsg "wrong pool" (pool.poolId == poolId && pool.operator == operator)
+        input <- fetch inputCid
+        assertMsg "input not owned by buyer" (input.owner == buyer)
+        assertMsg "pool does not pay out the invoice currency"
+          (counterAsset pool input.issuer input.symbol == (terms.issuer, terms.symbol))
+        (resIn, resOut) <- case orient pool input.issuer input.symbol of
+          Some r -> pure r
+          None -> abort "input asset is not in this pool"
+        assertMsg "pool too shallow for this invoice" (terms.amount < resOut)
+        let needIn = getAmountIn pool.feeBps terms.amount resIn resOut
+        assertMsg "slippage: conversion needs more than the buyer's maximum" (needIn <= input.amount)
+        (useCid, refund) <- takeExact inputCid input.amount needIn
+        inOp <- exercise useCid Transfer with newOwner = operator
+        (_, outCid, outAmt) <- exercise poolCid Pool_Swap with inCid = inOp, minOut = terms.amount
+        (dueCid, dust) <- takeExact outCid outAmt terms.amount
+        _ <- exercise dueCid Transfer with newOwner = supplier
+        forA_ dust (\d -> exercise d Transfer with newOwner = buyer)
+        -- unused input: give it back undisclosed
+        forA_ refund (\r -> exercise r Transfer with newOwner = buyer)
+        now <- getTime
+        create PaidInvoice with
+          supplier, buyer, terms
+          paidSymbol = input.symbol, paidAmount = needIn
+          converted = True, paidAt = now
+
+    -- | Conversion failed: the invoice goes back to open, funds stay with the buyer.
+    choice InvoiceSettlement_Reject : ContractId Invoice
+      with
+        reason : Text
+      controller operator
+      do create Invoice with supplier, buyer, terms

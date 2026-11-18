@@ -1,0 +1,42 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Helpers shared by the payroll and invoice modules.
+module Orvane.Pay.Util where
+
+import DA.Action (foldlA)
+import Orvane.Amm (Pool(..))
+import Orvane.Math (bpsDenominator)
+import Orvane.Token
+
+-- | Merge holdings of one asset and check the result is the expected asset.
+-- Returns the merged holding and its amount.
+mergeHoldings : Party -> Text -> [ContractId Token] -> Update (ContractId Token, Decimal)
+mergeHoldings issuer symbol holdings = case holdings of
+  [] -> abort "no holdings given"
+  first :: rest -> do
+    merged <- foldlA (\acc next -> exercise acc Merge with otherCid = next) first rest
+    tok <- fetch merged
+    assertMsg ("expected " <> symbol <> " from the agreed issuer")
+      (tok.issuer == issuer && tok.symbol == symbol)
+    pure (merged, tok.amount)
+
+-- | Input needed to receive exactly `amountOut` from a constant-product pool.
+-- A tiny buffer absorbs Decimal rounding so the output never falls short.
+getAmountIn : Decimal -> Decimal -> Decimal -> Decimal -> Decimal
+getAmountIn feeBps amountOut reserveIn reserveOut =
+  (reserveIn * amountOut * bpsDenominator) / ((reserveOut - amountOut) * (bpsDenominator - feeBps)) + 0.000001
+
+-- | Reserves of `pool` oriented as (in, out) for an input asset.
+orient : Pool -> Party -> Text -> Optional (Decimal, Decimal)
+orient pool issuer symbol
+  | (issuer, symbol) == (pool.issuerA, pool.symbolA) = Some (pool.reserveA, pool.reserveB)
+  | (issuer, symbol) == (pool.issuerB, pool.symbolB) = Some (pool.reserveB, pool.reserveA)
+  | otherwise = None
+
+-- | The other side of the pool for an input asset.
+counterAsset : Pool -> Party -> Text -> (Party, Text)
+counterAsset pool issuer symbol =
+  if (issuer, symbol) == (pool.issuerA, pool.symbolA)
+    then (pool.issuerB, pool.symbolB)
+    else (pool.issuerA, pool.symbolA)

@@ -1,25 +1,19 @@
 // Orvane operator service for the local sandbox.
 //
-//  1. Bootstraps a demo world (parties, USDx/CCx pool, seed liquidity).
-//  2. Settles SwapRequests and liquidity requests as they arrive.
+//  1. Uploads the contracts and bootstraps a demo world: a USDx/CCx pool,
+//     a company (Acme) with three employees, a supplier (Nova) and an auditor.
+//  2. Settles requests as they arrive: swaps, liquidity, payroll conversions
+//     and cross-currency invoice payments.
 //  3. Serves a tiny HTTP API for the web app: /api/config and /api/faucet.
 //
 // The operator only exposes public configuration. It never returns what it
 // can see on the ledger, so the privacy guarantees hold for the web app too.
 
+import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { JsonLedger, LedgerError, createdOf, type Contract } from '../shared/ledger.ts'
-import {
-  T,
-  dec,
-  exercise,
-  placeLiquidity,
-  type AddLiquidityRequest,
-  type Pool,
-  type RemoveLiquidityRequest,
-  type SwapRequest,
-  type Token,
-} from '../shared/amm.ts'
+import { T, dec, exercise, placeLiquidity, type Pool, type Token } from '../shared/amm.ts'
+import { P, issueInvoice, setPreference } from '../shared/payments.ts'
 
 const LEDGER_URL = process.env.LEDGER_URL ?? 'http://localhost:6864'
 const PORT = Number(process.env.OPERATOR_PORT ?? 7600)
@@ -27,18 +21,49 @@ const POOL_ID = 'USDx-CCx'
 const FEE_BPS = 30
 const TICK_MS = 700
 
+const DARS = [
+  new URL('../daml/orvane-amm/.daml/dist/orvane-defi-amm-0.1.0.dar', import.meta.url),
+  new URL('../daml/orvane-payments/.daml/dist/orvane-payments-0.1.0.dar', import.meta.url),
+]
+
 const ledger = new JsonLedger(LEDGER_URL)
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 19), ...args)
 
-type Parties = Record<'operator' | 'usdIssuer' | 'ccIssuer' | 'alice' | 'bob' | 'carol', string>
-
-const HINTS: Record<keyof Parties, string> = {
+const HINTS = {
   operator: 'Operator',
   usdIssuer: 'UsdIssuer',
   ccIssuer: 'CcIssuer',
   alice: 'Alice',
   bob: 'Bob',
   carol: 'Carol',
+  acme: 'Acme',
+  nova: 'Nova',
+  auditor: 'Auditor',
+} as const
+type Parties = Record<keyof typeof HINTS, string>
+
+const TEMPLATES: Record<string, string> = { ...T, ...P }
+
+async function uploadDars() {
+  for (const dar of DARS) {
+    let bytes: Buffer
+    try {
+      bytes = await readFile(dar)
+    } catch {
+      throw new Error(`missing ${dar.pathname}. Run "dpm build --all" in daml/ first.`)
+    }
+    // Right after start-up the participant may not be connected to a
+    // synchronizer yet; retry for a while.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await ledger.uploadDar(bytes)
+        break
+      } catch (err) {
+        if (attempt >= 30) throw err
+        await new Promise((r) => setTimeout(r, 2000))
+      }
+    }
+  }
 }
 
 async function ensureParties(): Promise<Parties> {
@@ -66,16 +91,22 @@ async function holdingsOf(owner: string, issuer: string, symbol: string) {
   return tokens.filter((t) => t.payload.owner === owner && t.payload.issuer === issuer && t.payload.symbol === symbol)
 }
 
-async function fundTrader(p: Parties, who: string, usd: number, cc: number) {
-  await mint(p.usdIssuer, who, 'USDx', usd)
-  await mint(p.ccIssuer, who, 'CCx', cc)
+async function fund(p: Parties, who: string, usd: number, cc: number) {
+  if (usd > 0) await mint(p.usdIssuer, who, 'USDx', usd)
+  if (cc > 0) await mint(p.ccIssuer, who, 'CCx', cc)
 }
 
-async function bootstrap(): Promise<Parties> {
-  const p = await ensureParties()
-  if (await findPool(p)) {
-    log('pool already exists, skipping seed')
-    return p
+const members = (p: Parties) => [p.alice, p.bob, p.carol, p.acme, p.nova]
+
+async function bootstrapMarket(p: Parties) {
+  const existing = await findPool(p)
+  if (existing) {
+    const missing = members(p).filter((m) => !existing.payload.members.includes(m))
+    if (missing.length) {
+      await ledger.submit([p.operator], [exercise(T.Pool, existing.contractId, 'Pool_SetMembers', { newMembers: members(p) })])
+      log('pool members updated')
+    }
+    return
   }
   log('creating pool', POOL_ID)
   await ledger.submit([p.operator], [
@@ -95,14 +126,14 @@ async function bootstrap(): Promise<Parties> {
           holdingB: null,
           totalShares: dec(0),
           feeBps: dec(FEE_BPS),
-          members: [p.alice, p.bob, p.carol],
+          members: members(p),
         },
       },
     },
   ])
 
   // Alice seeds the pool at 0.20 USDx per CCx.
-  await fundTrader(p, p.alice, 250_000, 1_250_000)
+  await fund(p, p.alice, 250_000, 1_250_000)
   const usd = await holdingsOf(p.alice, p.usdIssuer, 'USDx')
   const cc = await holdingsOf(p.alice, p.ccIssuer, 'CCx')
   await ledger.submit([p.alice], [
@@ -118,30 +149,83 @@ async function bootstrap(): Promise<Parties> {
     }),
   ])
   await settleOnce(p)
+  await fund(p, p.bob, 25_000, 60_000)
+  await fund(p, p.carol, 8_000, 30_000)
+}
 
-  await fundTrader(p, p.bob, 25_000, 60_000)
-  await fundTrader(p, p.carol, 8_000, 30_000)
+async function bootstrapBusiness(p: Parties) {
+  const acmeUsd = await holdingsOf(p.acme, p.usdIssuer, 'USDx')
+  if (acmeUsd.length) return
+  log('seeding Acme, Nova and payroll preferences')
+  await fund(p, p.acme, 80_000, 150_000)
+  await fund(p, p.nova, 2_000, 0)
+  // Bob takes his salary in CCx, the others in USDx.
+  for (const [who, sym] of [
+    [p.alice, 'USDx'],
+    [p.bob, 'CCx'],
+    [p.carol, 'USDx'],
+  ] as const) {
+    await ledger.submit([who], [setPreference(who, p.acme, sym)])
+  }
+  const due = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
+  await ledger.submit([p.nova], [
+    issueInvoice(p.nova, p.acme, {
+      invoiceNo: 'NOVA-1041',
+      memo: 'Warehouse racking, phase 2',
+      amount: 12_000,
+      issuer: p.usdIssuer,
+      symbol: 'USDx',
+      dueDate: due(21),
+    }),
+  ])
+  await ledger.submit([p.nova], [
+    issueInvoice(p.nova, p.acme, {
+      invoiceNo: 'NOVA-1042',
+      memo: 'Forklift maintenance, November',
+      amount: 1_850,
+      issuer: p.usdIssuer,
+      symbol: 'USDx',
+      dueDate: due(9),
+    }),
+  ])
+}
+
+async function bootstrap(): Promise<Parties> {
+  await uploadDars()
+  const p = await ensureParties()
+  await bootstrapMarket(p)
+  await bootstrapBusiness(p)
   log('demo world ready')
   return p
 }
 
 // ---------- settlement ----------
 
+// What to do when executing a request fails.
+const ON_FAIL: Record<string, (reason: string) => [string, unknown] | undefined> = {
+  SwapRequest: (reason) => ['SwapRequest_Reject', { reason }],
+  PayoutRequest: (reason) => ['PayoutRequest_Fallback', { reason }],
+  InvoiceSettlement: (reason) => ['InvoiceSettlement_Reject', { reason }],
+}
+
+const failed = new Set<string>()
+
 async function settleOnce(p: Parties) {
-  const requests = await ledger.query<SwapRequest | AddLiquidityRequest | RemoveLiquidityRequest>(p.operator, [
+  const requests = await ledger.query<unknown>(p.operator, [
     T.SwapRequest,
     T.AddLiquidityRequest,
     T.RemoveLiquidityRequest,
+    P.PayoutRequest,
+    P.InvoiceSettlement,
   ])
   for (const req of requests) {
     if (failed.has(req.contractId)) continue
     const pool = await findPool(p)
     if (!pool) return
     const kind = req.templateId.split(':').pop()!
-    const execChoice = `${kind}_Execute`
-    const templateId = (T as Record<string, string>)[kind]
+    const templateId = TEMPLATES[kind]
     try {
-      const tx = await ledger.submit([p.operator], [exercise(templateId, req.contractId, execChoice, { poolCid: pool.contractId })])
+      const tx = await ledger.submit([p.operator], [exercise(templateId, req.contractId, `${kind}_Execute`, { poolCid: pool.contractId })])
       const receipt = createdOf(tx, T.SwapReceipt)
       if (receipt) {
         const r = receipt.createArgument as { symbolIn: string; amountIn: string; symbolOut: string; amountOut: string }
@@ -151,24 +235,24 @@ async function settleOnce(p: Parties) {
       }
     } catch (err) {
       const reason = err instanceof LedgerError ? err.message : String(err)
-      log(`rejecting ${kind}: ${reason}`)
-      const rejectChoice = kind === 'SwapRequest' ? 'SwapRequest_Reject' : undefined
+      log(`could not settle ${kind}: ${reason}`)
+      const fallback = ON_FAIL[kind]?.(reason.slice(0, 200))
       try {
-        if (rejectChoice) {
-          await ledger.submit([p.operator], [exercise(templateId, req.contractId, rejectChoice, { reason })])
+        if (fallback) {
+          await ledger.submit([p.operator], [exercise(templateId, req.contractId, fallback[0], fallback[1])])
+          log(`  -> ${fallback[0]}`)
         } else {
           // Liquidity requests have no operator-side reject: leave them for the
           // provider to cancel, but don't retry forever.
           failed.add(req.contractId)
         }
       } catch (e) {
-        log('reject failed', e instanceof Error ? e.message : e)
+        failed.add(req.contractId)
+        log('  fallback failed', e instanceof Error ? e.message : e)
       }
     }
   }
 }
-
-const failed = new Set<string>()
 
 async function settleLoop(p: Parties) {
   for (;;) {
@@ -185,6 +269,7 @@ async function settleLoop(p: Parties) {
 
 function serve(p: Parties) {
   const lastDrip = new Map<string, number>()
+  const faucetable = [p.alice, p.bob, p.carol, p.acme, p.nova]
   const server = createServer(async (req, res) => {
     const send = (status: number, body: unknown) => {
       res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' })
@@ -196,10 +281,14 @@ function serve(p: Parties) {
           poolId: POOL_ID,
           operator: p.operator,
           issuers: { USDx: p.usdIssuer, CCx: p.ccIssuer },
+          business: { employer: p.acme, supplier: p.nova, auditor: p.auditor, employees: [p.alice, p.bob, p.carol] },
           personas: [
-            { key: 'alice', name: 'Alice', role: 'Liquidity provider', party: p.alice },
-            { key: 'bob', name: 'Bob', role: 'Trader', party: p.bob },
-            { key: 'carol', name: 'Carol', role: 'Pool member', party: p.carol },
+            { key: 'alice', name: 'Alice', role: 'Liquidity provider · Acme engineer', party: p.alice, group: 'market' },
+            { key: 'bob', name: 'Bob', role: 'Trader · Acme designer', party: p.bob, group: 'market' },
+            { key: 'carol', name: 'Carol', role: 'Pool member · Acme analyst', party: p.carol, group: 'market' },
+            { key: 'acme', name: 'Acme', role: 'Employer and buyer', party: p.acme, group: 'business' },
+            { key: 'nova', name: 'Nova', role: 'Supplier', party: p.nova, group: 'business' },
+            { key: 'auditor', name: 'Auditor', role: 'Sees totals only', party: p.auditor, group: 'business' },
           ],
         })
       }
@@ -207,11 +296,11 @@ function serve(p: Parties) {
         let raw = ''
         for await (const chunk of req) raw += chunk
         const { party } = JSON.parse(raw || '{}') as { party?: string }
-        if (!party || ![p.alice, p.bob, p.carol].includes(party)) return send(400, { error: 'unknown party' })
+        if (!party || !faucetable.includes(party)) return send(400, { error: 'unknown party' })
         const now = Date.now()
         if (now - (lastDrip.get(party) ?? 0) < 5_000) return send(429, { error: 'slow down' })
         lastDrip.set(party, now)
-        await fundTrader(p, party, 1_000, 5_000)
+        await fund(p, party, 1_000, 5_000)
         return send(200, { ok: true, minted: { USDx: 1000, CCx: 5000 } })
       }
       send(404, { error: 'not found' })

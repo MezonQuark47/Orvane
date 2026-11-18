@@ -1,10 +1,11 @@
 import * as Tooltip from '@radix-ui/react-tooltip'
-import { AnimatePresence, LayoutGroup, motion } from 'motion/react'
+import { LayoutGroup, motion } from 'motion/react'
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { OrvaneProvider, useOrvane } from './ledger/OrvaneProvider.tsx'
 import Holdings from './pages/Holdings.tsx'
 import Lens from './pages/Lens.tsx'
 import Liquidity from './pages/Liquidity.tsx'
+import Payments from './pages/Payments.tsx'
 import Trade from './pages/Trade.tsx'
 
 const Vault = lazy(() => import('./three/Vault.tsx'))
@@ -12,6 +13,7 @@ const Vault = lazy(() => import('./three/Vault.tsx'))
 const TABS = [
   { key: 'trade', label: 'Trade' },
   { key: 'liquidity', label: 'Liquidity' },
+  { key: 'payments', label: 'Payments' },
   { key: 'lens', label: 'Privacy lens' },
   { key: 'holdings', label: 'Holdings' },
 ] as const
@@ -55,7 +57,7 @@ function Shell() {
   return (
     <>
       <Suspense fallback={null}>
-        <Vault weightA={weights.a} weightB={weights.b} pulse={pulse} focus={tab === 'lens' ? 1 : 0} />
+        <Vault weightA={weights.a} weightB={weights.b} pulse={pulse} focus={tab === 'lens' || tab === 'payments' ? 1 : 0} />
       </Suspense>
       <div className="grain" aria-hidden />
       <div className="vignette" aria-hidden />
@@ -86,20 +88,19 @@ function Shell() {
           <Offline />
         ) : (
           <main>
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={`${tab}-${persona?.key}`}
-                initial={{ opacity: 0, filter: 'blur(12px)' }}
-                animate={{ opacity: 1, filter: 'blur(0px)' }}
-                exit={{ opacity: 0, filter: 'blur(12px)' }}
-                transition={{ duration: 0.35 }}
-              >
-                {tab === 'trade' && <Trade />}
-                {tab === 'liquidity' && <Liquidity />}
-                {tab === 'lens' && <Lens />}
-                {tab === 'holdings' && <Holdings />}
-              </motion.div>
-            </AnimatePresence>
+            {/* Enter-only transition: a keyed remount can't get stuck waiting on an exit. */}
+            <motion.div
+              key={`${tab}-${persona?.key ?? ''}`}
+              initial={{ opacity: 0, filter: 'blur(10px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              transition={{ duration: 0.4 }}
+            >
+              {tab === 'trade' && <Trade />}
+              {tab === 'liquidity' && <Liquidity />}
+              {tab === 'payments' && <Payments />}
+              {tab === 'lens' && <Lens />}
+              {tab === 'holdings' && <Holdings />}
+            </motion.div>
           </main>
         )}
 
@@ -120,16 +121,18 @@ function PersonaSwitch() {
   return (
     <div className="personas" role="radiogroup" aria-label="Act as">
       <span className="act-as">Act as</span>
-      {config.personas.map((p) => (
+      {config.personas.map((p, i) => (
         <Tooltip.Root key={p.key}>
+          {i > 0 && p.group !== config.personas[i - 1].group && <span className="persona-sep" aria-hidden />}
           <Tooltip.Trigger asChild>
             <button
               role="radio"
               aria-checked={persona?.key === p.key}
-              className={`avatar av-${p.key} ${persona?.key === p.key ? 'on' : ''}`}
+              aria-label={`${p.name}, ${p.role}`}
+              className={`avatar av-${p.key} ${p.group === 'business' ? 'org' : ''} ${persona?.key === p.key ? 'on' : ''}`}
               onClick={() => setPersona(p.key)}
             >
-              {p.name[0]}
+              {personaGlyph(p.key, p.name)}
             </button>
           </Tooltip.Trigger>
           <Tooltip.Portal>
@@ -143,6 +146,8 @@ function PersonaSwitch() {
     </div>
   )
 }
+
+export const personaGlyph = (key: string, name: string) => (key === 'auditor' ? '§' : name[0])
 
 function Offline() {
   return (
