@@ -3,8 +3,8 @@
 
 import { VaultStage } from '../three/stage.tsx'
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, useState } from 'react'
-import { HOLDING_V1, Scan, type HoldingView, type InstrumentId } from '../../../shared/amulet.ts'
+import { useState } from 'react'
+import { Scan } from '../../../shared/amulet.ts'
 import { type Contract } from '../../../shared/ledger.ts'
 import { X, registries, sameInstrument, type ExchangePool } from '../../../shared/exchange.ts'
 import {
@@ -19,11 +19,13 @@ import {
   type CreditLoanClosed,
   type CreditMarket,
   type CreditPosition,
+  type CreditWithdrawRequest,
 } from '../../../shared/credit.ts'
 import { healthFactor, liquidationPrice, owedAt } from '../../../shared/lending.ts'
 import { B, type AdvanceCn, type AdvanceLineCn } from '../../../shared/billing.ts'
 import AdvanceCardCn from './AdvanceCardCn.tsx'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
+import { useTokenBalances } from '../ledger/useTokenBalances.ts'
 import { pick, useNow, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, Tilt, TokenGlyph, fmt, fmtCompact } from '../ui/bits.tsx'
 import { useActivity } from '../ui/activity.tsx'
@@ -40,40 +42,16 @@ interface View {
   loans: Contract<CreditLoan>[]
   closed: Contract<CreditLoanClosed>[]
   pending: number
+  myWithdrawals: Contract<CreditWithdrawRequest>[]
   balances: { usdx: number; cc: number }
 }
 
-function useBalances(usdx: InstrumentId, cc: InstrumentId) {
-  const { ledger, party } = useOrvane()
-  const [b, setB] = useState({ usdx: 0, cc: 0 })
-  useEffect(() => {
-    if (!party) return
-    let alive = true
-    let timer: ReturnType<typeof setTimeout>
-    const tick = async () => {
-      try {
-        const hs = (await ledger.queryInterface<HoldingView>(party, HOLDING_V1)).filter((h) => h.view.owner === party && !h.view.lock)
-        const sum = (i: InstrumentId) => hs.filter((h) => sameInstrument(h.view.instrumentId, i)).reduce((s, h) => s + +h.view.amount, 0)
-        if (alive) setB({ usdx: sum(usdx), cc: sum(cc) })
-      } catch {
-        /* keep last */
-      }
-      if (alive) timer = setTimeout(tick, 1500)
-    }
-    tick()
-    return () => {
-      alive = false
-      clearTimeout(timer)
-    }
-  }, [ledger, party, usdx, cc])
-  return b
-}
 
 export default function LendingCn() {
   const { config, party, persona } = useOrvane()
   const ex = config!.exchange!
   const rows = usePolled(TEMPLATES, 1300)
-  const balances = useBalances(ex.usdx, ex.amulet)
+  const balances = useTokenBalances(ex.usdx, ex.amulet)
   const market = pick<CreditMarket>(rows, 'CreditMarket').find((m) => m.payload.marketId === ex.creditMarketId)
   const pool = pick<ExchangePool>(rows, 'ExchangePool')[0]?.payload
   const price = pool ? (sameInstrument(pool.instrA, ex.usdx) ? +pool.reserveA / +pool.reserveB : +pool.reserveB / +pool.reserveA) : 0
@@ -84,6 +62,7 @@ export default function LendingCn() {
     loans: pick<CreditLoan>(rows, 'CreditLoan').filter((l) => l.payload.borrower === party),
     closed: pick<CreditLoanClosed>(rows, 'CreditLoanClosed').filter((l) => l.payload.borrower === party),
     pending: ['CreditBorrowRequest', 'CreditRepayRequest', 'CreditSupplyRequest', 'CreditWithdrawRequest'].reduce((n, k) => n + pick(rows, k).length, 0),
+    myWithdrawals: pick<CreditWithdrawRequest>(rows, 'CreditWithdrawRequest').filter((w) => w.payload.lender === party),
     balances,
   }
   const advLine = pick<AdvanceLineCn>(rows, 'AdvanceLineCn').find((l) => l.payload.employee === party)
@@ -397,11 +376,20 @@ function SupplyCn({ v }: { v: View }) {
   const sv = m && +m.totalShares ? (+m.cash + +m.principalOut) / +m.totalShares : 1
   const myShares = v.positions.reduce((s, p) => s + +p.payload.shares, 0)
   const activity = useActivity()
+  // only idle cash can be paid out; the rest is lent to borrowers
+  const idle = m ? +m.cash : 0
+  const fitting = [...v.positions]
+    .sort((a, b) => +a.payload.shares - +b.payload.shares)
+    .reduce<{ picked: typeof v.positions; sum: number }>(
+      (acc, p) => (acc.sum + +p.payload.shares * sv <= idle ? { picked: [...acc.picked, p], sum: acc.sum + +p.payload.shares * sv } : acc),
+      { picked: [], sum: 0 },
+    )
+  const all = fitting.picked.length === v.positions.length
 
-  const act = async (title: string, detail: string, fn: () => Promise<void>) => {
+  const act = async (title: string, detail: string, fn: () => Promise<void>, done?: string) => {
     setState({ busy: true })
     try {
-      await activity.track(title, fn, { detail, done: () => ({ detail }) })
+      await activity.track(title, fn, { detail, done: () => ({ detail: done ?? detail }) })
       setState({})
     } catch (e) {
       setState({ error: errorText(e) })
@@ -430,7 +418,7 @@ function SupplyCn({ v }: { v: View }) {
         <span className="muted small">USDx</span>
         <button
           className="chip-btn"
-          disabled={state.busy || amount <= 0 || amount > v.balances.usdx || v.pending > 0}
+          disabled={state.busy || amount <= 0 || amount > v.balances.usdx || v.pending > v.myWithdrawals.length}
           onClick={() =>
             act(`Supply ${fmt(amount)} USDx`, 'Earns interest from CC-backed loans', () =>
               run(async (reg) => {
@@ -445,13 +433,44 @@ function SupplyCn({ v }: { v: View }) {
         {v.positions[0] && (
           <button
             className="chip-btn ghosty"
-            disabled={state.busy || v.pending > 0}
-            onClick={() => act('Withdraw supply', `${fmt(myShares * sv)} USDx back to your wallet`, () => ledger.submit([party!], v.positions.map((p) => withdrawRequest(party!, config!.operator, p.contractId))).then(() => undefined))}
+            disabled={state.busy || v.pending > 0 || fitting.picked.length === 0}
+            title={all ? undefined : `Only ${fmt(idle)} USDx is idle right now; the rest is lent out`}
+            onClick={() =>
+              act(
+                'Withdraw supply',
+                `${fmt(fitting.sum)} USDx`,
+                () => ledger.submit([party!], fitting.picked.map((p) => withdrawRequest(party!, config!.operator, p.contractId))).then(() => undefined),
+                `Requested ${fmt(fitting.sum)} USDx. The operator pays it out in a moment.`,
+              )
+            }
           >
-            Withdraw all
+            {all ? 'Withdraw all' : fitting.picked.length ? `Withdraw ${fmt(fitting.sum)}` : 'All lent out'}
           </button>
         )}
       </div>
+      {v.positions[0] && !all && (
+        <p className="muted small">
+          {fmt(idle)} USDx of the market is idle; the rest is out on loans. The remainder can be withdrawn as borrowers repay.
+        </p>
+      )}
+      {v.myWithdrawals.map((w) => (
+        <p key={w.contractId} className="muted small pending-line">
+          A withdrawal is waiting for idle cash in the market.{' '}
+          <button
+            className="link"
+            disabled={state.busy}
+            onClick={() =>
+              act('Cancel withdrawal', 'Your position stays in the market', () =>
+                ledger
+                  .submit([party!], [{ ExerciseCommand: { templateId: CR.CreditWithdrawRequest, contractId: w.contractId, choice: 'CreditWithdrawRequest_Cancel', choiceArgument: {} } }])
+                  .then(() => undefined),
+              )
+            }
+          >
+            Cancel it
+          </button>
+        </p>
+      ))}
       {state.error && <p className="tx-error">{state.error}</p>}
     </Panel>
   )

@@ -7,7 +7,7 @@ import { amountOut } from '../../../shared/amm.ts'
 import { Scan, type InstrumentId } from '../../../shared/amulet.ts'
 import { createdOf, type Contract } from '../../../shared/ledger.ts'
 import { X, allocationSpec, registries, sameInstrument, spendable, type ExchangePool } from '../../../shared/exchange.ts'
-import { ALLOCATION_FACTORY_V1, emptyExtraArgs } from '../../../shared/amulet.ts'
+import { ALLOCATION_FACTORY_V1, ALLOCATION_V1, emptyExtraArgs } from '../../../shared/amulet.ts'
 import { B, repayAdvanceCn, type AdvanceCn, type AdvanceLineCn } from '../../../shared/billing.ts'
 import { CR, type CreditMarket } from '../../../shared/credit.ts'
 import {
@@ -22,6 +22,7 @@ import {
 } from '../../../shared/treasury.ts'
 import { useOrvane, type Config, type Persona } from '../ledger/OrvaneProvider.tsx'
 import { pick, usePolledState } from '../ledger/usePolled.ts'
+import { useTokenBalances } from '../ledger/useTokenBalances.ts'
 import { EyeIcon, Panel, Rolling, TokenGlyph, fmt } from '../ui/bits.tsx'
 import { errorText } from '../ui/errors.ts'
 import { useActivity } from '../ui/activity.tsx'
@@ -60,6 +61,7 @@ export function PayrollCnComposer() {
   const ex = cfg.exchange!
   const data = useCnData()
   const activity = useActivity()
+  const treasury = useTokenBalances(ex.usdx, ex.amulet)
   const employees = cfg.business.employees
   const [amounts, setAmounts] = useState<Record<string, string>>(() =>
     Object.fromEntries(employees.map((e) => [e, String(DEFAULT_PAY[nameOf(cfg, e)] ?? 3000)])),
@@ -87,6 +89,8 @@ export function PayrollCnComposer() {
   })
   const total = rows.reduce((s, r) => s + r.gross, 0)
   const missing = rows.filter((r) => r.amount > 0 && !r.consent)
+  // every line plus every advance repayment leaves the employer's USDx
+  const short = treasury.loaded && total > treasury.usdx
 
   const run = async () => {
     if (!party) return
@@ -94,11 +98,13 @@ export function PayrollCnComposer() {
     setStep({ s: 'locking', runId })
     const paid = rows.filter((r) => r.amount > 0).length
     const id = activity.start(`Payroll · ${period}`, `Locking ${paid} pay lines, ${fmt(total)} USDx…`)
+    const reg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
+    const usdxReg = reg.forInstrument(ex.usdx, party)
+    // what this run has locked so far, so a failure can hand it all back
+    const repayments: Array<{ advanceCid: string; employee: string; allocationCid: string }> = []
+    let batch: { cid: string; payload: PayrollBatch } | undefined
     try {
-      const reg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
-      const usdxReg = reg.forInstrument(ex.usdx, party)
       // 1. lock each advance repayment (employer -> operator, executed by the employer on payday)
-      const repayments: Array<{ advanceCid: string; employee: string; allocationCid: string }> = []
       for (const r of rows) {
         for (const a of r.advances) {
           const holdings = await spendable(ledger, party, ex.usdx)
@@ -142,6 +148,7 @@ export function PayrollCnComposer() {
       const tx = await ledger.submit([party], [lock.command], [], lock.disclosed)
       const created = createdOf(tx, TR.PayrollBatch)
       if (!created) throw new Error('payroll batch was not created')
+      batch = { cid: created.contractId, payload: created.createArgument as PayrollBatch }
       setStep({ s: 'locked', runId })
       activity.update(id, { detail: 'Lines locked. Releasing them in one transaction…' })
       await new Promise((r) => setTimeout(r, 900)) // let the user see the locked state
@@ -165,12 +172,43 @@ export function PayrollCnComposer() {
         }),
       )
       await ledger.submit([party], [release.command, ...repayCmds], [], [...release.disclosed, ...repayCtx.flatMap((c) => c.disclosed)])
+      batch = undefined
+      repayments.length = 0
       setStep({ s: 'done', runId })
       activity.done(id, { detail: `${paid} payslips delivered, ${fmt(total)} USDx` })
       signalSettled('USDx')
     } catch (e) {
       setStep({ s: 'error', msg: errorText(e) })
       activity.fail(id, e)
+      await unlock(repayments.map((r) => r.allocationCid), batch)
+    }
+  }
+
+  // Hand back whatever a failed run locked. Best effort: anything left over
+  // returns to the employer at the allocation's deadline anyway.
+  const unlock = async (allocations: string[], batch?: { cid: string; payload: PayrollBatch }) => {
+    if (!party) return
+    const usdxReg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '').forInstrument(ex.usdx, party)
+    for (const cid of allocations) {
+      try {
+        const w = await usdxReg.allocationArgs(cid, 'withdraw')
+        await ledger.submit([party], [{ ExerciseCommand: { templateId: ALLOCATION_V1, contractId: cid, choice: 'Allocation_Withdraw', choiceArgument: { extraArgs: w.extraArgs } } }], [], w.disclosed)
+      } catch {
+        /* already gone */
+      }
+    }
+    if (batch) {
+      try {
+        const ws = await Promise.all(batch.payload.locked.map((l) => usdxReg.allocationArgs(l.allocationCid, 'withdraw')))
+        await ledger.submit(
+          [party],
+          [{ ExerciseCommand: { templateId: TR.PayrollBatch, contractId: batch.cid, choice: 'PayrollBatch_Cancel', choiceArgument: { withdrawArgs: ws.map((w) => w.extraArgs) } } }],
+          [],
+          ws.flatMap((w) => w.disclosed),
+        )
+      } catch {
+        /* already gone */
+      }
     }
   }
 
@@ -226,8 +264,16 @@ export function PayrollCnComposer() {
         </div>
         <div className="muted small right">{missing.length ? `${missing.length} employee(s) haven't given consent` : 'All employees consented'}</div>
       </div>
-      <button className={`primary ${busy ? 'busy' : ''}`} disabled={busy || total <= 0 || missing.length > 0} onClick={run}>
-        <span>{busy ? (step.s === 'locking' ? 'Locking funds…' : 'Releasing payroll…') : 'Lock & release payroll'}</span>
+      <button className={`primary ${busy ? 'busy' : ''}`} disabled={busy || total <= 0 || missing.length > 0 || short} onClick={run}>
+        <span>
+          {busy
+            ? step.s === 'locking'
+              ? 'Locking funds…'
+              : 'Releasing payroll…'
+            : short
+              ? `Not enough USDx · ${fmt(treasury.usdx)} in the treasury`
+              : 'Lock & release payroll'}
+        </span>
       </button>
       {step.s !== 'idle' && (
         <motion.div className="timeline" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>

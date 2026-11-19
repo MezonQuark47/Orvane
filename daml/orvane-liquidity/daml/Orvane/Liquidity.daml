@@ -1,0 +1,233 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Liquidity for the token-standard exchange pool (Orvane.Exchange).
+--
+-- A provider adds both sides of the pair as CIP-56 allocations and receives
+-- an LP share; withdrawing pays out that share of both reserves. Each step is
+-- a single atomic transaction: the allocations execute, the pool's reserves
+-- move and the share is minted or burned together, or nothing happens.
+--
+-- The pool books reserves and the LpBook books shares. Swaps grow the
+-- reserves through fees and never touch the book, so a share is worth a
+-- little more after every trade. A share is visible to its owner and the
+-- operator only; pool members see the reserves and the total, never who.
+module Orvane.Liquidity where
+
+import Splice.Api.Token.HoldingV1 (InstrumentId(..), Holding)
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+
+import Orvane.Exchange (ExchangePool(..), ExchangePool_Fund(..))
+import Orvane.Math (sharesForDeposit)
+
+-- ---------------------------------------------------------------- shares
+
+-- | Total LP shares of one pool. Members see the total, like the reserves,
+-- so a provider can value a share; who holds which share stays private.
+template LpBook
+  with
+    operator    : Party
+    poolId      : Text
+    totalShares : Decimal
+    members     : [Party]
+  where
+    signatory operator
+    observer members
+    ensure totalShares >= 0.0
+
+    choice LpBook_Add : ContractId LpBook
+      with
+        delta : Decimal
+      controller operator
+      do create this with totalShares = totalShares + delta
+
+-- | A provider's claim on the pool.
+template LpShare
+  with
+    operator : Party
+    owner    : Party
+    poolId   : Text
+    shares   : Decimal
+  where
+    signatory operator
+    observer owner
+    ensure shares > 0.0
+
+-- ---------------------------------------------------------------- allocations
+
+-- | One side of a deposit, as the side's registry prepared it.
+data Side = Side with
+    factoryCid       : ContractId AllocationFactory
+    expectedAdmin    : Party
+    allocation       : AllocationSpecification
+    requestedAt      : Time
+    inputHoldingCids : [ContractId Holding]
+    extraArgs        : ExtraArgs
+  deriving (Eq, Show)
+
+allocateSide : Side -> Update (ContractId Allocation)
+allocateSide s = do
+  res <- exercise s.factoryCid AllocationFactory_Allocate with
+    expectedAdmin = s.expectedAdmin
+    allocation = s.allocation
+    requestedAt = s.requestedAt
+    inputHoldingCids = s.inputHoldingCids
+    extraArgs = s.extraArgs
+  case res.output of
+    AllocationInstructionResult_Completed c -> pure c
+    _ -> abort "the registry did not complete the allocation immediately"
+
+-- | Check an allocation is exactly the leg we expect.
+legIs : AllocationView -> Party -> Party -> Party -> InstrumentId -> Decimal -> Text -> Bool
+legIs v sender receiver executor instrument amount ref =
+  let leg = v.allocation.transferLeg
+      s = v.allocation.settlement
+  in leg.sender == sender && leg.receiver == receiver && s.executor == executor
+       && leg.instrumentId == instrument && leg.amount == amount && s.settlementRef.id == ref
+
+-- ---------------------------------------------------------------- deposit
+
+-- | Wallet-friendly entry point: one signature allocates both sides and
+-- files the request.
+template LpDepositOrder
+  with
+    provider  : Party
+    operator  : Party
+    poolId    : Text
+    sideA     : Side
+    sideB     : Side
+    minShares : Decimal
+  where
+    signatory provider
+
+    choice LpDepositOrder_Place : ContractId LpDepositRequest
+      controller provider
+      do
+        let toOperator s =
+              s.allocation.transferLeg.sender == provider
+                && s.allocation.transferLeg.receiver == operator
+                && s.allocation.settlement.executor == operator
+            ref = sideA.allocation.settlement.settlementRef.id
+        assertMsg "deposits must go from the provider to the operator" (toOperator sideA && toOperator sideB)
+        assertMsg "both sides must belong to one settlement" (sideB.allocation.settlement.settlementRef.id == ref)
+        allocA <- allocateSide sideA
+        allocB <- allocateSide sideB
+        create LpDepositRequest with
+          provider, operator, poolId, minShares, ref
+          allocationA = allocA
+          instrumentA = sideA.allocation.transferLeg.instrumentId
+          amountA = sideA.allocation.transferLeg.amount
+          allocationB = allocB
+          instrumentB = sideB.allocation.transferLeg.instrumentId
+          amountB = sideB.allocation.transferLeg.amount
+
+-- | A signed deposit. Visible to the provider and the operator only.
+template LpDepositRequest
+  with
+    provider    : Party
+    operator    : Party
+    poolId      : Text
+    allocationA : ContractId Allocation
+    instrumentA : InstrumentId
+    amountA     : Decimal
+    allocationB : ContractId Allocation
+    instrumentB : InstrumentId
+    amountB     : Decimal
+    minShares   : Decimal
+    ref         : Text
+  where
+    signatory provider
+    observer operator
+
+    -- | Move both sides into the reserves and mint the share, atomically.
+    choice LpDepositRequest_Settle : ContractId LpShare
+      with
+        poolCid    : ContractId ExchangePool
+        bookCid    : ContractId LpBook
+        extraArgsA : ExtraArgs
+        extraArgsB : ExtraArgs
+      controller operator
+      do
+        pool <- fetch poolCid
+        book <- fetch bookCid
+        assertMsg "wrong pool" (pool.poolId == poolId && pool.operator == operator && book.poolId == poolId && book.operator == operator)
+        assertMsg "deposits must match the pool's pair" (instrumentA == pool.instrA && instrumentB == pool.instrB)
+        vA <- view <$> fetch allocationA
+        vB <- view <$> fetch allocationB
+        assertMsg "deposit allocations do not match"
+          (legIs vA provider operator operator instrumentA amountA ref && legIs vB provider operator operator instrumentB amountB ref)
+        let minted = sharesForDeposit book.totalShares pool.reserveA pool.reserveB amountA amountB
+        assertMsg "slippage: shares below minimum" (minted >= minShares && minted > 0.0)
+        _ <- exercise allocationA Allocation_ExecuteTransfer with extraArgs = extraArgsA
+        _ <- exercise allocationB Allocation_ExecuteTransfer with extraArgs = extraArgsB
+        _ <- exercise poolCid ExchangePool_Fund with addA = amountA, addB = amountB
+        _ <- exercise bookCid LpBook_Add with delta = minted
+        create LpShare with operator, owner = provider, poolId, shares = minted
+
+    -- | The operator can't fill it: both sides go back to the provider.
+    choice LpDepositRequest_Reject : ()
+      with
+        reason      : Text
+        cancelArgsA : ExtraArgs
+        cancelArgsB : ExtraArgs
+      controller operator
+      do
+        _ <- exercise allocationA Allocation_Cancel with extraArgs = cancelArgsA
+        _ <- exercise allocationB Allocation_Cancel with extraArgs = cancelArgsB
+        pure ()
+
+-- ---------------------------------------------------------------- withdraw
+
+-- | Burn a share for its part of both reserves.
+template LpWithdrawRequest
+  with
+    provider : Party
+    operator : Party
+    shareCid : ContractId LpShare
+    minA     : Decimal
+    minB     : Decimal
+  where
+    signatory provider
+    observer operator
+
+    -- | `payoutA` / `payoutB` are what the operator allocated from the
+    -- reserves; never above the share's value.
+    choice LpWithdrawRequest_Settle : ()
+      with
+        poolCid    : ContractId ExchangePool
+        bookCid    : ContractId LpBook
+        payoutA    : ContractId Allocation
+        payoutB    : ContractId Allocation
+        ref        : Text
+        extraArgsA : ExtraArgs
+        extraArgsB : ExtraArgs
+      controller operator
+      do
+        share <- fetch shareCid
+        pool <- fetch poolCid
+        book <- fetch bookCid
+        assertMsg "share does not match"
+          (share.owner == provider && share.operator == operator && share.poolId == pool.poolId
+            && book.poolId == pool.poolId && pool.operator == operator)
+        assertMsg "invalid shares" (share.shares <= book.totalShares)
+        vA <- view <$> fetch payoutA
+        vB <- view <$> fetch payoutB
+        let paidA = vA.allocation.transferLeg.amount
+            paidB = vB.allocation.transferLeg.amount
+            fraction = share.shares / book.totalShares
+        assertMsg "payout allocations do not match"
+          (legIs vA operator provider operator pool.instrA paidA ref && legIs vB operator provider operator pool.instrB paidB ref)
+        assertMsg "payout above the share's value" (paidA <= pool.reserveA * fraction && paidB <= pool.reserveB * fraction)
+        assertMsg "slippage: withdrawal below minimum" (paidA >= minA && paidB >= minB && paidA > 0.0 && paidB > 0.0)
+        archive shareCid
+        _ <- exercise bookCid LpBook_Add with delta = negate share.shares
+        _ <- exercise poolCid ExchangePool_Fund with addA = negate paidA, addB = negate paidB
+        _ <- exercise payoutA Allocation_ExecuteTransfer with extraArgs = extraArgsA
+        _ <- exercise payoutB Allocation_ExecuteTransfer with extraArgs = extraArgsB
+        pure ()
+
+    choice LpWithdrawRequest_Cancel : ()
+      controller provider
+      do pure ()

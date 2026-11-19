@@ -111,6 +111,7 @@ export async function bootstrapCredit(ctx: ExchangeCtx, p: { operator: string; u
 // ---------- settlement ----------
 
 const failed = new Set<string>()
+const waiting = new Set<string>()
 
 export async function settleCreditOnce(ctx: ExchangeCtx, operator: string) {
   const ledger = ctx.ledger()
@@ -127,8 +128,16 @@ export async function settleCreditOnce(ctx: ExchangeCtx, operator: string) {
       else if (kind === 'CreditRepayRequest') await settleRepay(ctx, operator, market, row as Contract<CreditRepayRequest>)
       else if (kind === 'CreditSurplus') await paySurplus(ctx, operator, row as Contract<CreditSurplus>)
     } catch (err) {
+      // a withdrawal larger than the idle cash waits until borrowers repay
+      if (kind === 'CreditWithdrawRequest' && /not enough idle cash/.test(errText(err))) {
+        if (!waiting.has(row.contractId)) ctx.log('credit: withdrawal waits for idle cash in the market')
+        waiting.add(row.contractId)
+        continue
+      }
       failed.add(row.contractId)
       ctx.log(`credit: could not settle ${kind}: ${errText(err)}`)
+      // a supply that can't settle goes back to the lender
+      if (kind === 'CreditSupplyRequest') await rejectSupply(ctx, operator, market, row as Contract<CreditSupplyRequest>)
     }
   }
 }
@@ -145,12 +154,29 @@ async function settleSupply(ctx: ExchangeCtx, operator: string, market: Contract
   ctx.log(`credit: supply of ${(+req.payload.amount).toFixed(2)} USDx settled`)
 }
 
+async function rejectSupply(ctx: ExchangeCtx, operator: string, market: Contract<CreditMarket>, req: Contract<CreditSupplyRequest>) {
+  try {
+    const c = await ctx.reg.forInstrument(market.payload.asset, operator).allocationArgs(req.payload.allocationCid, 'cancel')
+    await ctx.ledger().submit(
+      [operator],
+      [{ ExerciseCommand: { templateId: CR.CreditSupplyRequest, contractId: req.contractId, choice: 'CreditSupplyRequest_Reject', choiceArgument: { cancelArgs: c.extraArgs } } }],
+      [],
+      c.disclosed,
+    )
+    ctx.log('  supply returned to the lender')
+  } catch (e) {
+    ctx.log('  could not return the supply', errText(e))
+  }
+}
+
 async function settleWithdraw(ctx: ExchangeCtx, operator: string, market: Contract<CreditMarket>, req: Contract<CreditWithdrawRequest>) {
   const ledger = ctx.ledger()
   const pos = (await ledger.query<CreditPosition>(operator, [CR.CreditPosition])).find((p) => p.contractId === req.payload.positionCid)
   if (!pos) throw new Error('position no longer exists')
   const m = market.payload
   const value = floorAmount((+pos.payload.shares * (+m.cash + +m.principalOut)) / +m.totalShares)
+  // checked here so a waiting withdrawal doesn't lock and release a payout every tick
+  if (value > +m.cash) throw new Error('not enough idle cash in the market')
   const ref = newRef('withdraw')
   const payout = await allocateFromOperator(ctx, operator, m.asset, req.payload.lender, value, ref)
   try {

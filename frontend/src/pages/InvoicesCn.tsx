@@ -26,6 +26,7 @@ import { newRef, prepareAllocationArgs } from '../../../shared/credit.ts'
 import { amountIn } from '../../../shared/payments.ts'
 import { useOrvane, type Config } from '../ledger/OrvaneProvider.tsx'
 import { pick, usePolledState } from '../ledger/usePolled.ts'
+import { useTokenBalances } from '../ledger/useTokenBalances.ts'
 import { Panel, Rolling, SkeletonList, fmt } from '../ui/bits.tsx'
 import { useActivity } from '../ui/activity.tsx'
 import { errorText } from '../ui/errors.ts'
@@ -59,6 +60,7 @@ export function InvoicesCnInbox() {
   const [busy, setBusy] = useState<string>()
   const [error, setError] = useState<string>()
   const activity = useActivity()
+  const wallet = useTokenBalances(ex.usdx, ex.amulet)
   const reg = () => registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
 
   const ccNeeded = (amount: number) => {
@@ -137,11 +139,16 @@ export function InvoicesCnInbox() {
                   {fmt(amt)} <span className="muted">{label(t.instrument)}</span>
                 </div>
                 <div className="inv-actions">
-                  <button className="chip-btn" disabled={!!busy} onClick={() => payDirect(inv)}>
-                    {busy === inv.contractId ? 'Paying…' : `Pay in ${label(t.instrument)}`}
+                  <button className="chip-btn" disabled={!!busy || (wallet.loaded && wallet.usdx < amt)} onClick={() => payDirect(inv)}>
+                    {busy === inv.contractId ? 'Paying…' : wallet.loaded && wallet.usdx < amt ? `Not enough ${label(t.instrument)}` : `Pay in ${label(t.instrument)}`}
                   </button>
-                  <button className="chip-btn cc" disabled={!!busy || !Number.isFinite(cc)} onClick={() => payWithCC(inv)} title="Converted through the pool; the supplier still receives USDx">
-                    Pay ≈ {fmt(cc, 0)} CC
+                  <button
+                    className="chip-btn cc"
+                    disabled={!!busy || !Number.isFinite(cc) || (wallet.loaded && wallet.cc < cc)}
+                    onClick={() => payWithCC(inv)}
+                    title={wallet.loaded && wallet.cc < cc ? `You hold ${fmt(wallet.cc, 0)} CC` : 'Converted through the pool; the supplier still receives USDx'}
+                  >
+                    {wallet.loaded && wallet.cc < cc ? 'Not enough CC' : <>Pay ≈ {fmt(cc, 0)} CC</>}
                   </button>
                   <button className="chip-btn ghosty" disabled={!!busy} onClick={() => act(inv.contractId, `Dispute ${t.invoiceNo}`, 'Sent back to the supplier', () => ledger.submit([party!], [disputeInvoiceCn(inv.contractId, 'Quantities do not match the delivery note')]).then(() => undefined))}>
                     Dispute
@@ -299,11 +306,19 @@ export function SupplierDeskCn() {
                 <span className="mono">{fmt(+d.payload.terms.amount)} USDx</span>
                 <button
                   className="link"
-                  onClick={() =>
-                    ledger.submit([party!], [
-                      reissueInvoiceCn(d.contractId, { ...d.payload.terms, invoiceNo: `${d.payload.terms.invoiceNo}-R1`, amount: (Math.round(+d.payload.terms.amount * 0.9 * 100) / 100).toFixed(10) }),
-                    ])
-                  }
+                  onClick={() => {
+                    const amount = Math.round(+d.payload.terms.amount * 0.9 * 100) / 100
+                    const no = `${d.payload.terms.invoiceNo}-R1`
+                    activity
+                      .track(
+                        `Reissue ${no}`,
+                        () => ledger.submit([party!], [reissueInvoiceCn(d.contractId, { ...d.payload.terms, invoiceNo: no, amount: amount.toFixed(10) })]),
+                        { detail: `${fmt(amount)} USDx to Acme, 10% off`, done: () => ({ detail: `${fmt(amount)} USDx sent back to Acme, 10% off` }) },
+                      )
+                      .catch(() => {
+                        /* shown in the toast and Activity */
+                      })
+                  }}
                 >
                   reissue −10%
                 </button>

@@ -15,6 +15,7 @@ import {
 import type { Contract } from '../../../shared/ledger.ts'
 import { useOrvane, type Persona } from '../ledger/OrvaneProvider.tsx'
 import { EyeIcon, fmt, fmtCompact } from '../ui/bits.tsx'
+import { readCnView } from './lensCn.ts'
 
 type Row = { cid: string; kind: string; title: string; detail: string }
 
@@ -127,15 +128,17 @@ function describe(c: Contract<unknown>, self: string): Row {
 }
 
 function useView(persona: Persona) {
-  const { ledger } = useOrvane()
+  const { ledger, config } = useOrvane()
+  // on the token-standard flows the lens reads those contracts and the CIP-56 holdings
+  const cn = !!config?.exchange
   const [rows, setRows] = useState<Row[]>([])
   useEffect(() => {
     let alive = true
     let timer: ReturnType<typeof setTimeout>
     const tick = async () => {
       try {
-        const cs = await ledger.query<unknown>(persona.party, ALL)
-        if (alive) setRows(cs.map((c) => describe(c, persona.party)).sort((a, b) => order(a.kind) - order(b.kind)))
+        const rows = cn ? await readCnView(ledger, persona.party) : (await ledger.query<unknown>(persona.party, ALL)).map((c) => describe(c, persona.party))
+        if (alive) setRows(rows.sort((a, b) => order(a.kind) - order(b.kind)))
       } catch {
         /* keep last view */
       }
@@ -146,19 +149,23 @@ function useView(persona: Persona) {
       alive = false
       clearTimeout(timer)
     }
-  }, [ledger, persona.party])
+  }, [ledger, persona.party, cn])
   return rows
 }
 
 const ORDER = [
   'Attestation',
   'Payslip',
+  'Batch',
+  'Conversion',
   'Invoice',
   'InvoiceSettlement',
   'PaidInvoice',
   'DisputedInvoice',
   'PayoutRequest',
   'Loan',
+  'Request',
+  'AdvRequest',
   'Advance',
   'AdvRepaid',
   'LoanClosed',
@@ -167,10 +174,14 @@ const ORDER = [
   'AdvLine',
   'Pool',
   'SwapReceipt',
+  'Receipt',
   'SwapRequest',
   'LpShare',
+  'LpDeposit',
+  'LpWithdraw',
   'Preference',
   'Token',
+  'Holding',
 ]
 const order = (k: string) => ORDER.indexOf(k)
 

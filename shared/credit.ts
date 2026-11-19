@@ -114,6 +114,8 @@ export async function prepareAllocationArgs(args: {
   instrument: InstrumentId
   amount: number
   ref: string
+  /** distinct per leg when one settlement allocates several */
+  legId?: string
 }): Promise<{ fields: Record<string, unknown>; disclosed: DisclosedContract[] }> {
   const holdings = await spendable(args.ledger, args.sender, args.instrument)
   if (!holdings.length) throw new Error(`No spendable ${args.instrument.id === 'Amulet' ? 'CC' : args.instrument.id}`)
@@ -124,7 +126,7 @@ export async function prepareAllocationArgs(args: {
     receiver: args.operator,
     instrument: args.instrument,
     amount: args.amount,
-    legId: 'leg',
+    legId: args.legId ?? 'leg',
   })
   const requestedAt = new Date(Date.now() - 5_000).toISOString()
   const inputHoldingCids = holdings.map((h) => h.contractId)

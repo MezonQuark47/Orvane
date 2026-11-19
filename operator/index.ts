@@ -17,6 +17,7 @@ import { P, issueInvoice, setPreference } from '../shared/payments.ts'
 import { bootstrapExchange, bootstrapPayroll, convertPayOnce, exchangeContext, fundTrader, settleExchangeOnce, EXCHANGE_POOL_ID, type ExchangeCtx } from './exchange.ts'
 import { bootstrapBilling, settleBillingOnce } from './billing.ts'
 import { bootstrapCredit, liquidateCreditOnce, settleCreditOnce, CREDIT_MARKET_ID } from './credit.ts'
+import { bootstrapLiquidity, settleLiquidityOnce } from './liquidity.ts'
 import { L, borrow, healthFactor, marketView, owedAt, supply, type LendingMarket, type Loan } from '../shared/lending.ts'
 
 // ORVANE_NETWORK=sandbox (default): `dpm sandbox`, no auth.
@@ -49,6 +50,7 @@ const DARS = [
   new URL('../daml/orvane-exchange/.daml/dist/orvane-exchange-0.1.0.dar', import.meta.url),
   new URL('../daml/orvane-treasury/.daml/dist/orvane-treasury-0.2.0.dar', import.meta.url),
   new URL('../daml/orvane-credit/.daml/dist/orvane-credit-0.2.0.dar', import.meta.url),
+  new URL('../daml/orvane-liquidity/.daml/dist/orvane-liquidity-0.1.0.dar', import.meta.url),
 ]
 
 // Admin client (allocates parties, uploads DARs). On LocalNet every call is
@@ -307,6 +309,7 @@ async function bootstrap(): Promise<Parties> {
     // on the sandbox a CIP-56 stand-in CC from the Orvane registry is used.
     exchange = await exchangeContext(() => ledger, log, exchangeParties(p), NETWORK_NAME === 'localnet')
     await bootstrapExchange(exchange, exchangeParties(p))
+    await bootstrapLiquidity(exchange, p.operator)
     await bootstrapPayroll(exchange, {
       operator: p.operator,
       usdIssuer: p.usdIssuer,
@@ -439,6 +442,7 @@ async function settleLoop(p: Parties) {
       if (exchange) {
         await convertPayOnce(exchange, p.operator)
         await settleExchangeOnce(exchange, p.operator)
+        await settleLiquidityOnce(exchange, p.operator)
         await settleCreditOnce(exchange, p.operator)
         await liquidateCreditOnce(exchange, p.operator)
         await settleBillingOnce(exchange, p.operator)

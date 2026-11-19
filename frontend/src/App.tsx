@@ -8,6 +8,7 @@ import Holdings from './pages/Holdings.tsx'
 import Landing from './pages/Landing.tsx'
 import Lens from './pages/Lens.tsx'
 import Liquidity from './pages/Liquidity.tsx'
+import LiquidityCn from './pages/LiquidityCn.tsx'
 import Payments from './pages/Payments.tsx'
 import Lending from './pages/Lending.tsx'
 import LendingCn from './pages/LendingCn.tsx'
@@ -139,7 +140,7 @@ function Shell() {
               {status === 'ready' && (
                 <>
                   {tab === 'trade' && (config?.exchange ? <ExchangeTrade /> : <Trade />)}
-                  {tab === 'liquidity' && <Liquidity />}
+                  {tab === 'liquidity' && (config?.exchange ? <LiquidityCn /> : <Liquidity />)}
                   {tab === 'payments' && <Payments />}
                   {tab === 'lending' && (config?.exchange?.creditMarketId ? <LendingCn /> : <Lending />)}
                   {tab === 'lens' && <Lens />}

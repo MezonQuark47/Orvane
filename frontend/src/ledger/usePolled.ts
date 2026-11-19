@@ -14,7 +14,7 @@ export function usePolledState(templateIds: readonly string[], intervalMs = 1300
   const [loadedFor, setLoadedFor] = useState<string>()
   const key = templateIds.join('|')
   useEffect(() => {
-    if (!party) return
+    if (!party || !key) return
     setRows([])
     let alive = true
     let timer: ReturnType<typeof setTimeout>
