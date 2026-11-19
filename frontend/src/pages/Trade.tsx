@@ -1,3 +1,4 @@
+import { VaultStage } from '../three/stage.tsx'
 import { AnimatePresence, motion } from 'motion/react'
 import { useMemo, useState } from 'react'
 import { amountOut, priceImpact } from '../../../shared/amm.ts'
@@ -52,6 +53,7 @@ export default function Trade() {
   return (
     <div className="page page-trade">
       <div className="narrative">
+        <VaultStage scene="trade" />
         <motion.p className="eyebrow" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
           USDx / CCx · {config?.network === 'localnet' ? 'Canton LocalNet' : 'Canton sandbox'}
         </motion.p>

@@ -1,6 +1,7 @@
 // Lending on LocalNet: borrow USDx against real Canton Coin. Every movement
 // of funds is a CIP-56 allocation settled atomically by the operator.
 
+import { VaultStage } from '../three/stage.tsx'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import { HOLDING_V1, Scan, type HoldingView, type InstrumentId } from '../../../shared/amulet.ts'
@@ -94,6 +95,10 @@ export default function LendingCn() {
   return (
     <div className="page page-lending">
       <div className="narrative">
+        <VaultStage
+          scene="lending"
+          weights={[1 + (1 - util) * 0.05, 1 + (util - 0.5) * 0.1]}
+          lift={(util - 0.5) * 0.9} />
         <p className="eyebrow">Lending · USDx against {ex.realAmulet ? 'real Canton Coin' : 'test CC'} · CIP-56</p>
         <h1 className="display">
           <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>

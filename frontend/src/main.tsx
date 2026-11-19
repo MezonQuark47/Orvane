@@ -1,13 +1,13 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import '@fontsource/instrument-serif/400.css'
-import '@fontsource/instrument-serif/400-italic.css'
-import '@fontsource-variable/bricolage-grotesque'
-import '@fontsource/martian-mono/300.css'
-import '@fontsource/martian-mono/400.css'
+import '@fontsource-variable/bodoni-moda/opsz.css'
+import '@fontsource-variable/bodoni-moda/opsz-italic.css'
+import '@fontsource-variable/schibsted-grotesk'
+import '@fontsource/fragment-mono/400.css'
 import './index.css'
 import './payments.css'
 import './lending.css'
+import './landing.css'
 import App from './App.tsx'
 
 createRoot(document.getElementById('root')!).render(

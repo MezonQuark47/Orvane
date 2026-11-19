@@ -17,9 +17,9 @@
   --rose: #e07a5f;
   --amber: #e3b23c;
 
-  --serif: 'Instrument Serif', 'Times New Roman', serif;
-  --sans: 'Bricolage Grotesque Variable', 'Segoe UI', sans-serif;
-  --mono: 'Martian Mono', ui-monospace, monospace;
+  --serif: 'Bodoni Moda Variable', 'Didot', 'Times New Roman', serif;
+  --sans: 'Schibsted Grotesk Variable', 'Segoe UI', sans-serif;
+  --mono: 'Fragment Mono', ui-monospace, monospace;
 
   --radius: 22px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -43,7 +43,6 @@ body {
   color: var(--text);
   font-family: var(--sans);
   font-size: 15px;
-  font-variation-settings: 'wdth' 92;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
@@ -286,7 +285,7 @@ main > div {
   flex-direction: column;
   gap: 22px;
   max-width: 620px;
-  padding-top: 30vh;
+  padding-top: 10vh;
 }
 .eyebrow {
   margin: 0;
@@ -1158,4 +1157,142 @@ p.tx-ok.mono {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ---------- motion system ---------- */
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 160ms;
+  --dur-base: 320ms;
+}
+.sweep {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  z-index: 50;
+  transform-origin: left center;
+  background: linear-gradient(90deg, transparent, var(--brass-hi) 40%, var(--verdigris) 80%, transparent);
+  box-shadow: 0 0 12px 1px rgba(241, 215, 155, 0.45);
+  pointer-events: none;
+}
+/* the 3D scene now carries the vignette; keep only the reading shade on the right */
+.vignette {
+  background: linear-gradient(90deg, transparent 50%, rgba(7, 8, 11, 0.45) 78%);
+}
+/* panels: solid enough to read, quiet enough to let the scene breathe */
+.panel {
+  transition: transform var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
+}
+.panel:hover {
+  border-color: rgba(236, 229, 211, 0.14);
+}
+/* primary buttons press in */
+.primary:not(:disabled):active,
+.chip-btn:not(:disabled):active {
+  transform: translateY(1px) scale(0.985);
+  transition-duration: var(--dur-fast);
+}
+
+/* ---------- type: Bodoni Moda for display, engraved-banknote contrast ---------- */
+.display {
+  font-optical-sizing: auto;
+  font-size: clamp(42px, 4.9vw, 80px);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+}
+.display.small {
+  font-size: clamp(38px, 4.4vw, 64px);
+}
+.display em {
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  text-shadow: none;
+}
+.display {
+  text-shadow: 0 2px 28px rgba(7, 8, 11, 0.55);
+}
+
+/* ---------- the vault as a backdrop ----------
+   The stage takes no room in the layout: it is an absolute box behind the
+   page, and the 3D vault fits itself into it. Text flows over the vault;
+   a soft shade under the copy keeps it readable. */
+.page {
+  position: relative;
+}
+.vault-stage {
+  position: absolute;
+  top: -4vh;
+  left: 14%;
+  width: 72%;
+  height: min(86vh, 820px);
+  margin: 0;
+  pointer-events: none;
+}
+/* lending tips like a balance, so it needs a little more height */
+.stage-lending {
+  top: -2vh;
+}
+/* the vault door stands behind the right-hand side of the payments desk */
+.stage-payments,
+.pay-stage {
+  top: -10vh;
+  left: 40%;
+  width: 60%;
+  height: min(90vh, 860px);
+}
+.pay-hero {
+  display: block;
+}
+/* a reading shade under the copy, so the vault can sit right behind it */
+.page:has(.vault-stage)::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  left: calc(-1 * clamp(16px, 4vw, 56px));
+  width: 62%;
+  height: 100%;
+  background: radial-gradient(ellipse 70% 60% at 30% 52%, rgba(7, 8, 11, 0.62), rgba(7, 8, 11, 0) 70%);
+  pointer-events: none;
+}
+@media (max-width: 860px) {
+  .vault-stage,
+  .stage-payments,
+  .pay-stage {
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 36vh;
+  }
+  .narrative {
+    padding-top: 34vh;
+  }
+}
+
+/* ---------- top bar follows the page ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  transition: padding var(--dur-base, 0.35s) var(--ease);
+}
+.topbar::before {
+  content: '';
+  position: absolute;
+  inset: 0 calc(-1 * clamp(16px, 4vw, 56px));
+  z-index: -1;
+  background: linear-gradient(to bottom, rgba(7, 8, 11, 0.86), rgba(7, 8, 11, 0.62));
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border-bottom: 1px solid var(--line);
+  opacity: 0;
+  transition: opacity var(--dur-base, 0.35s) var(--ease);
+}
+.topbar.scrolled {
+  padding: 12px 0;
+}
+.topbar.scrolled::before {
+  opacity: 1;
 }

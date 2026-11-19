@@ -1,12 +1,14 @@
 // Trade on LocalNet: USDx against real Canton Coin, settled through
 // CIP-56 token-standard allocations.
 
+import { signalSettled } from '../three/settle.ts'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useState } from 'react'
 import { amountOut, priceImpact } from '../../../shared/amm.ts'
 import { HOLDING_V1, Scan, type HoldingView, type InstrumentId } from '../../../shared/amulet.ts'
 import { LedgerError } from '../../../shared/ledger.ts'
 import { X, prepareSwapOrder, registries, sameInstrument, type ExchangePool, type ExchangeReceipt } from '../../../shared/exchange.ts'
+import { VaultStage } from '../three/stage.tsx'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
 import { pick, usePolled } from '../ledger/usePolled.ts'
 import type { PricePoint } from '../ledger/OrvaneProvider.tsx'
@@ -87,7 +89,10 @@ export default function ExchangeTrade() {
   useEffect(() => {
     if (tx.phase !== 'settling' || !tx.ref) return
     const r = receipts.find((x) => x.payload.settlementRef === tx.ref)
-    if (r) setTx({ phase: 'done', receipt: r.payload })
+    if (r) {
+      setTx({ phase: 'done', receipt: r.payload })
+      signalSettled(r.payload.instrumentIn.id === 'USDx' ? 'USDx' : 'CCx')
+    }
   }, [receipts, tx])
   useEffect(() => {
     if (tx.phase !== 'settling') return
@@ -107,6 +112,10 @@ export default function ExchangeTrade() {
   const minOut = out * (1 - slippage / 100)
   const price = p && +p.reserveB ? +p.reserveA / +p.reserveB : 0 // USDx per CC
   const change = useMemo(() => (history.length > 1 ? ((history[history.length - 1].price - history[0].price) / history[0].price) * 100 : 0), [history])
+
+  // the orbs weigh each side of the pool against where it started
+  const seed = history[0]
+  const weights: [number, number] | undefined = p && seed ? [+p.reserveA / seed.reserveA, +p.reserveB / seed.reserveB] : undefined
 
   const busy = tx.phase === 'signing' || tx.phase === 'settling'
   const insufficient = amount > balance(from)
@@ -130,6 +139,7 @@ export default function ExchangeTrade() {
   return (
     <div className="page page-trade">
       <div className="narrative">
+        <VaultStage scene="trade" weights={weights} />
         <motion.p className="eyebrow" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           USDx / CC · {ex.realAmulet ? 'Canton LocalNet · real Canton Coin' : 'Canton sandbox · CIP-56 test CC'}
         </motion.p>

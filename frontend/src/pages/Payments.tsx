@@ -1,3 +1,4 @@
+import { VaultStage } from '../three/stage.tsx'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useState } from 'react'
 import { amountOut } from '../../../shared/amm.ts'
@@ -103,6 +104,7 @@ export default function Payments() {
 
   return (
     <div className="page page-payments">
+      <div className="pay-hero">
       <header className="pay-head">
         <p className="eyebrow">Payments · {persona.name}</p>
         <h1 className="display small">
@@ -112,6 +114,8 @@ export default function Payments() {
         </h1>
         <p className="lede">{lede}</p>
       </header>
+      <VaultStage scene="payments" className="pay-stage" />
+      </div>
       {role === 'acme' && <EmployerView data={data} config={config} />}
       {role === 'nova' && (config.exchange ? <SupplierDeskCn /> : <SupplierView data={data} config={config} />)}
       {role === 'auditor' && (config.exchange ? <AuditorCn /> : <AuditorView data={data} />)}

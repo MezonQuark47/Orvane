@@ -1,3 +1,4 @@
+import { VaultStage } from '../three/stage.tsx'
 import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { LedgerError, type Contract } from '../../../shared/ledger.ts'
@@ -113,6 +114,7 @@ function Narrative({ ctx }: { ctx: Ctx }) {
   const util = m ? utilization(m) : 0
   return (
     <div className="narrative">
+      <VaultStage scene="lending" lift={(util - 0.5) * 0.9} />
       <p className="eyebrow">Lending · USDx against CCx</p>
       <h1 className="display">
         <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>

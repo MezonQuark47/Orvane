@@ -1,3 +1,4 @@
+import { VaultStage } from '../three/stage.tsx'
 import { motion } from 'motion/react'
 import { useState } from 'react'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
@@ -21,6 +22,7 @@ export default function Liquidity() {
   return (
     <div className="page page-liquidity">
       <div className="narrative">
+        <VaultStage scene="liquidity" />
         <p className="eyebrow">Liquidity · USDx / CCx</p>
         <h1 className="display">
           <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>

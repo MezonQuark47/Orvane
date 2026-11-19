@@ -1,5 +1,6 @@
 // Payroll on LocalNet: CIP-56 allocations, real Canton Coin conversions.
 
+import { signalSettled } from '../three/settle.ts'
 import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { amountOut } from '../../../shared/amm.ts'
@@ -158,6 +159,7 @@ export function PayrollCnComposer() {
       )
       await ledger.submit([party], [release.command, ...repayCmds], [], [...release.disclosed, ...repayCtx.flatMap((c) => c.disclosed)])
       setStep({ s: 'done', runId })
+      signalSettled('USDx')
     } catch (e) {
       setStep({ s: 'error', msg: errText(e) })
     }

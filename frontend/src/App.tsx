@@ -3,6 +3,7 @@ import { LayoutGroup, motion } from 'motion/react'
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { OrvaneProvider, useOrvane } from './ledger/OrvaneProvider.tsx'
 import Holdings from './pages/Holdings.tsx'
+import Landing from './pages/Landing.tsx'
 import Lens from './pages/Lens.tsx'
 import Liquidity from './pages/Liquidity.tsx'
 import Payments from './pages/Payments.tsx'
@@ -12,6 +13,7 @@ import Trade from './pages/Trade.tsx'
 import ExchangeTrade from './pages/ExchangeTrade.tsx'
 
 const Vault = lazy(() => import('./three/Vault.tsx'))
+import type { VaultScene } from './three/Vault.tsx'
 
 const TABS = [
   { key: 'trade', label: 'Trade' },
@@ -21,7 +23,8 @@ const TABS = [
   { key: 'lens', label: 'Privacy lens' },
   { key: 'holdings', label: 'Holdings' },
 ] as const
-type Tab = (typeof TABS)[number]['key']
+// 'home' is the landing; it has no tab of its own, the wordmark leads there
+type Tab = (typeof TABS)[number]['key'] | 'home'
 
 export default function App() {
   return (
@@ -35,7 +38,7 @@ export default function App() {
 
 function readTab(): Tab {
   const h = window.location.hash.slice(1)
-  return (TABS.find((t) => t.key === h)?.key ?? 'trade') as Tab
+  return TABS.find((t) => t.key === h)?.key ?? 'home'
 }
 
 function Shell() {
@@ -46,8 +49,21 @@ function Shell() {
     window.addEventListener('hashchange', on)
     return () => window.removeEventListener('hashchange', on)
   }, [])
+  // every section starts at its top, with the vault in its stage
+  useEffect(() => {
+    window.scrollTo({ top: 0 })
+  }, [tab])
+  // the top bar picks up a glass backdrop once the page moves under it
+  const [scrolled, setScrolled] = useState(false)
+  useEffect(() => {
+    const on = () => setScrolled(window.scrollY > 8)
+    on()
+    window.addEventListener('scroll', on, { passive: true })
+    return () => window.removeEventListener('scroll', on)
+  }, [])
   const go = (t: Tab) => {
-    window.location.hash = t
+    if (t === 'home') window.history.pushState(null, '', window.location.pathname + window.location.search)
+    else window.location.hash = t
     setTab(t)
   }
 
@@ -61,14 +77,20 @@ function Shell() {
   return (
     <>
       <Suspense fallback={null}>
-        <Vault weightA={weights.a} weightB={weights.b} pulse={pulse} focus={tab === 'lens' || tab === 'payments' ? 1 : 0} />
+        <Vault weightA={weights.a} weightB={weights.b} pulse={pulse} scene={(tab === 'home' ? 'hero' : tab) as VaultScene} />
       </Suspense>
-      <div className="grain" aria-hidden />
       <div className="vignette" aria-hidden />
 
       <div className="app">
-        <header className="topbar">
-          <a className="wordmark" href="#trade" onClick={() => go('trade')}>
+        <header className={`topbar ${scrolled ? 'scrolled' : ''}`}>
+          <a
+            className="wordmark"
+            href="/"
+            onClick={(e) => {
+              e.preventDefault()
+              go('home')
+            }}
+          >
             <span className="mark" aria-hidden>
               <i />
               <i />
@@ -88,17 +110,27 @@ function Shell() {
           <PersonaSwitch />
         </header>
 
-        {status === 'offline' ? (
+        {status === 'offline' && tab !== 'home' ? (
           <Offline />
         ) : (
-          <main>
+          <main className={tab === 'home' ? 'is-landing' : undefined}>
+            {/* A brass light sweeps the top edge on every section change. */}
+            <motion.span
+              key={`sweep-${tab}-${persona?.key ?? ''}`}
+              className="sweep"
+              aria-hidden
+              initial={{ scaleX: 0, opacity: 1 }}
+              animate={{ scaleX: 1, opacity: 0 }}
+              transition={{ scaleX: { duration: 0.9, ease: [0.22, 1, 0.36, 1] }, opacity: { duration: 0.5, delay: 0.7 } }}
+            />
             {/* Enter-only transition: a keyed remount can't get stuck waiting on an exit. */}
             <motion.div
               key={`${tab}-${persona?.key ?? ''}`}
-              initial={{ opacity: 0, filter: 'blur(10px)' }}
-              animate={{ opacity: 1, filter: 'blur(0px)' }}
-              transition={{ duration: 0.4 }}
+              initial={{ opacity: 0, y: 14, filter: 'blur(6px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
             >
+              {tab === 'home' && <Landing go={go} />}
               {tab === 'trade' && (config?.exchange ? <ExchangeTrade /> : <Trade />)}
               {tab === 'liquidity' && <Liquidity />}
               {tab === 'payments' && <Payments />}

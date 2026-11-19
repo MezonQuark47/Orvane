@@ -1,5 +1,6 @@
 // Token-standard invoices: buyer inbox (Acme) and supplier desk (Nova).
 
+import { signalSettled } from '../three/settle.ts'
 import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { Scan, type InstrumentId } from '../../../shared/amulet.ts'
@@ -93,6 +94,7 @@ export function InvoicesCnInbox() {
       const allocationCid = (payment.createArgument as { allocationCid: string }).allocationCid
       const ctx = await r.forInstrument(t.instrument, party!).allocationArgs(allocationCid, 'execute-transfer')
       await ledger.submit([party!], [settleInvoicePayment(payment.contractId, ctx.extraArgs)], [], ctx.disclosed)
+      signalSettled('USDx')
     })
 
   const payWithCC = (inv: Contract<InvoiceCn>) =>
@@ -100,6 +102,7 @@ export function InvoicesCnInbox() {
       const need = ccNeeded(+inv.payload.terms.amount) * BUFFER
       const prep = await prepareAllocationArgs({ ledger, reg: reg(), sender: party!, operator: cfg.operator, instrument: ex.amulet, amount: Math.ceil(need * 1e4) / 1e4, ref: newRef('inv-cc') })
       await ledger.submit([party!], [payInvoiceConverted(inv.contractId, cfg.operator, ex.poolId, prep.fields)], [], prep.disclosed)
+      signalSettled('CCx')
     })
 
   return (

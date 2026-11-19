@@ -1,3 +1,4 @@
+import { VaultStage } from '../three/stage.tsx'
 import { motion } from 'motion/react'
 import { useState } from 'react'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
@@ -9,10 +10,12 @@ export default function Holdings() {
   const [dripping, setDripping] = useState(false)
   const [loopState, setLoopState] = useState<{ session?: LoopSession; error?: string; busy?: boolean }>({})
   const total = balances.USDx + balances.CCx * (pool?.price ?? 0)
+  const usdShare = total ? balances.USDx / total : 0.5
 
   return (
     <div className="page page-holdings">
       <div className="narrative">
+        <VaultStage scene="holdings" weights={[1 + (usdShare - 0.5) * 0.12, 1 + (0.5 - usdShare) * 0.12]} />
         <p className="eyebrow">Holdings · {persona?.name}</p>
         <h1 className="display">
           <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>

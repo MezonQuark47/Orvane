@@ -32,7 +32,7 @@ export default defineConfig(async ({ mode }) => {
     },
     build: {
       // three.js lives in its own lazy chunk
-      chunkSizeWarningLimit: 1100,
+      chunkSizeWarningLimit: 1200,
     },
   }
 })
