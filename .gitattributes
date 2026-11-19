@@ -2,6 +2,5 @@
 *.ps1 text eol=crlf
 *.dar binary
 
-# This tells GitHub to highlight Daml files as if they were Haskell. It's not
-# perfect, but it's better than no syntax highlighting at all.
+# This tells GitHub to highlight Daml files as if they were Haskell.
 *.daml linguist-language=Haskell
