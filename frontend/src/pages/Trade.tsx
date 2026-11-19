@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { amountOut, priceImpact } from '../../../shared/amm.ts'
 import { useOrvane, type Symbol } from '../ledger/OrvaneProvider.tsx'
 import { EyeIcon, Panel, Rolling, Sparkline, Tilt, TokenGlyph, fmt, fmtCompact } from '../ui/bits.tsx'
+import { errorText } from '../ui/errors.ts'
 
 const SLIPPAGES = [0.1, 0.5, 1, 3]
 
@@ -254,7 +255,7 @@ function Timeline() {
   return (
     <motion.div className="timeline" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>
       {tx.phase === 'error' ? (
-        <p className="tx-error">{tx.message}</p>
+        <p className="tx-error">{errorText(tx.message)}</p>
       ) : (
         <ol>
           {STEPS.map((s, i) => (

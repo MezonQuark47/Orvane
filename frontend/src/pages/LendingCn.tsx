@@ -5,7 +5,7 @@ import { VaultStage } from '../three/stage.tsx'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import { HOLDING_V1, Scan, type HoldingView, type InstrumentId } from '../../../shared/amulet.ts'
-import { LedgerError, type Contract } from '../../../shared/ledger.ts'
+import { type Contract } from '../../../shared/ledger.ts'
 import { X, registries, sameInstrument, type ExchangePool } from '../../../shared/exchange.ts'
 import {
   CR,
@@ -26,10 +26,11 @@ import AdvanceCardCn from './AdvanceCardCn.tsx'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
 import { pick, useNow, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, Tilt, TokenGlyph, fmt, fmtCompact } from '../ui/bits.tsx'
+import { useActivity } from '../ui/activity.tsx'
+import { errorText } from '../ui/errors.ts'
 import { HealthGauge, UtilRing } from './Lending.tsx'
 
 const TEMPLATES = [B.AdvanceLineCn, B.AdvanceCn, B.AdvanceRequestCn, CR.CreditMarket, CR.CreditPosition, CR.CreditLoan, CR.CreditLoanClosed, CR.CreditBorrowRequest, CR.CreditRepayRequest, CR.CreditSupplyRequest, CR.CreditWithdrawRequest, X.ExchangePool] as const
-const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
 const pct = (bps: number) => `${fmt(bps / 100, 2)}%`
 
 interface View {
@@ -197,17 +198,23 @@ function BorrowCn({ v }: { v: View }) {
   const hf = healthFactor(value, liq, amount)
   const short = coll > v.balances.cc
   const noCash = m ? amount > +m.cash : true
+  const activity = useActivity()
 
   const go = async () => {
     setState({ busy: true })
     try {
-      await run(async (reg) => {
-        const prep = await prepareAllocationArgs({ ledger, reg, sender: party!, operator: config!.operator, instrument: ex.amulet, amount: coll, ref: newRef('borrow') })
-        return { command: borrowOrder(party!, config!.operator, ex.creditMarketId!, prep.fields, amount), disclosed: prep.disclosed }
-      })
+      await activity.track(
+        `Borrow ${fmt(amount)} USDx`,
+        () =>
+          run(async (reg) => {
+            const prep = await prepareAllocationArgs({ ledger, reg, sender: party!, operator: config!.operator, instrument: ex.amulet, amount: coll, ref: newRef('borrow') })
+            return { command: borrowOrder(party!, config!.operator, ex.creditMarketId!, prep.fields, amount), disclosed: prep.disclosed }
+          }),
+        { detail: `Locking ${fmt(coll, 0)} CC as collateral…`, done: () => ({ detail: `${fmt(coll, 0)} CC locked. The operator opens the loan in a moment.` }) },
+      )
       setState({ ok: 'CC locked. The operator is settling your loan…' })
     } catch (e) {
-      setState({ error: errText(e) })
+      setState({ error: errorText(e) })
     }
   }
 
@@ -323,17 +330,23 @@ function LoanCardCn({ loan, v }: { loan: Contract<CreditLoan>; v: View }) {
   const hf = healthFactor(value, liq, owed)
   // the settlement happens a moment after signing; cover ~2 minutes of interest
   const repayAmount = Math.ceil(owed * 1.0005 * 1e6) / 1e6
+  const activity = useActivity()
 
   const repay = async () => {
     setBusy(true)
     setError(undefined)
     try {
-      await run(async (reg) => {
-        const prep = await prepareAllocationArgs({ ledger, reg, sender: party!, operator: config!.operator, instrument: ex.usdx, amount: repayAmount, ref: newRef('repay') })
-        return { command: repayOrder(party!, config!.operator, loan.contractId, prep.fields), disclosed: prep.disclosed }
-      })
+      await activity.track(
+        'Repay loan',
+        () =>
+          run(async (reg) => {
+            const prep = await prepareAllocationArgs({ ledger, reg, sender: party!, operator: config!.operator, instrument: ex.usdx, amount: repayAmount, ref: newRef('repay') })
+            return { command: repayOrder(party!, config!.operator, loan.contractId, prep.fields), disclosed: prep.disclosed }
+          }),
+        { detail: `${fmt(repayAmount)} USDx`, done: () => ({ detail: `${fmt(repayAmount)} USDx sent. Your CC comes back once it settles.` }) },
+      )
     } catch (e) {
-      setError(errText(e))
+      setError(errorText(e))
     } finally {
       setBusy(false)
     }
@@ -383,14 +396,15 @@ function SupplyCn({ v }: { v: View }) {
   const amount = Number(raw) || 0
   const sv = m && +m.totalShares ? (+m.cash + +m.principalOut) / +m.totalShares : 1
   const myShares = v.positions.reduce((s, p) => s + +p.payload.shares, 0)
+  const activity = useActivity()
 
-  const act = async (fn: () => Promise<void>) => {
+  const act = async (title: string, detail: string, fn: () => Promise<void>) => {
     setState({ busy: true })
     try {
-      await fn()
+      await activity.track(title, fn, { detail, done: () => ({ detail }) })
       setState({})
     } catch (e) {
-      setState({ error: errText(e) })
+      setState({ error: errorText(e) })
     }
   }
 
@@ -418,7 +432,7 @@ function SupplyCn({ v }: { v: View }) {
           className="chip-btn"
           disabled={state.busy || amount <= 0 || amount > v.balances.usdx || v.pending > 0}
           onClick={() =>
-            act(() =>
+            act(`Supply ${fmt(amount)} USDx`, 'Earns interest from CC-backed loans', () =>
               run(async (reg) => {
                 const prep = await prepareAllocationArgs({ ledger, reg, sender: party!, operator: config!.operator, instrument: ex.usdx, amount, ref: newRef('supply') })
                 return { command: supplyOrder(party!, config!.operator, ex.creditMarketId!, prep.fields), disclosed: prep.disclosed }
@@ -432,7 +446,7 @@ function SupplyCn({ v }: { v: View }) {
           <button
             className="chip-btn ghosty"
             disabled={state.busy || v.pending > 0}
-            onClick={() => act(() => ledger.submit([party!], v.positions.map((p) => withdrawRequest(party!, config!.operator, p.contractId))).then(() => undefined))}
+            onClick={() => act('Withdraw supply', `${fmt(myShares * sv)} USDx back to your wallet`, () => ledger.submit([party!], v.positions.map((p) => withdrawRequest(party!, config!.operator, p.contractId))).then(() => undefined))}
           >
             Withdraw all
           </button>

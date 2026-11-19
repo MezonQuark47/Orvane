@@ -148,3 +148,47 @@ export function Tilt({ children, className = '', max = 6 }: { children: React.Re
     </motion.div>
   )
 }
+
+// Placeholder shapes while the first ledger read is in flight.
+export function Skeleton({ w = '100%', h = 12, r = 6 }: { w?: number | string; h?: number; r?: number }) {
+  return <span className="skel" style={{ width: w, height: h, borderRadius: r }} aria-hidden />
+}
+
+export function SkeletonList({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="skel-list" role="status" aria-label="Loading">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="skel-row" style={{ animationDelay: `${i * 0.08}s` }}>
+          <Skeleton w={`${44 - i * 6}%`} />
+          <Skeleton w="18%" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function PageSkeleton() {
+  return (
+    <div className="page page-skeleton" role="status" aria-label="Connecting to the ledger">
+      <div className="narrative">
+        <Skeleton w={190} h={11} />
+        <Skeleton w="78%" h={58} r={12} />
+        <Skeleton w="56%" h={58} r={12} />
+        <Skeleton w="88%" h={13} />
+        <Skeleton w="64%" h={13} />
+      </div>
+      <div className="rail">
+        <section className="panel skel-panel">
+          <Skeleton w="40%" h={14} />
+          <Skeleton h={64} r={14} />
+          <Skeleton h={64} r={14} />
+          <Skeleton h={46} r={999} />
+        </section>
+        <section className="panel skel-panel">
+          <Skeleton w="34%" h={12} />
+          <SkeletonList rows={3} />
+        </section>
+      </div>
+    </div>
+  )
+}

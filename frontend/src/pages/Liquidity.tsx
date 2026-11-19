@@ -2,10 +2,11 @@ import { VaultStage } from '../three/stage.tsx'
 import { motion } from 'motion/react'
 import { useState } from 'react'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
-import { EyeIcon, Panel, Rolling, Tilt, TokenGlyph, fmt } from '../ui/bits.tsx'
+import { EyeIcon, Panel, Rolling, SkeletonList, Tilt, TokenGlyph, fmt } from '../ui/bits.tsx'
+import { errorText } from '../ui/errors.ts'
 
 export default function Liquidity() {
-  const { pool, lpShares, balances, deposit, withdraw, tx } = useOrvane()
+  const { pool, lpShares, balances, deposit, withdraw, tx, loaded } = useOrvane()
   const [raw, setRaw] = useState('')
   const amountA = Number(raw) || 0
   const amountB = pool && pool.reserveA ? (amountA * pool.reserveB) / pool.reserveA : 0
@@ -112,7 +113,7 @@ export default function Liquidity() {
               </span>
             </button>
             {tx.kind === 'deposit' && tx.phase === 'done' && <p className="tx-ok">Deposit settled. Your LP position updated.</p>}
-            {tx.kind === 'deposit' && tx.phase === 'error' && <p className="tx-error">{tx.message}</p>}
+            {tx.kind === 'deposit' && tx.phase === 'error' && <p className="tx-error">{errorText(tx.message)}</p>}
           </Tilt>
         </Panel>
 
@@ -123,7 +124,9 @@ export default function Liquidity() {
               <EyeIcon /> you + operator
             </span>
           </header>
-          {lpShares.length === 0 ? (
+          {lpShares.length === 0 && !loaded ? (
+            <SkeletonList rows={2} />
+          ) : lpShares.length === 0 ? (
             <p className="empty">No positions. Deposits mint an LP share contract to your party.</p>
           ) : (
             <ul className="lp-list">
@@ -146,7 +149,7 @@ export default function Liquidity() {
             </ul>
           )}
           {tx.kind === 'withdraw' && tx.phase === 'done' && <p className="tx-ok">Withdrawn to your wallet.</p>}
-          {tx.kind === 'withdraw' && tx.phase === 'error' && <p className="tx-error">{tx.message}</p>}
+          {tx.kind === 'withdraw' && tx.phase === 'error' && <p className="tx-error">{errorText(tx.message)}</p>}
         </Panel>
       </div>
     </div>

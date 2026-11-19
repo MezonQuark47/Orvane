@@ -1,12 +1,12 @@
 // Earned-wage advance on the token standard, for an employee with a line.
 
 import { useState } from 'react'
-import { LedgerError, type Contract } from '../../../shared/ledger.ts'
+import { type Contract } from '../../../shared/ledger.ts'
 import { requestAdvanceCn, type AdvanceCn, type AdvanceLineCn } from '../../../shared/billing.ts'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
 import { Panel, fmt } from '../ui/bits.tsx'
-
-const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
+import { useActivity } from '../ui/activity.tsx'
+import { errorText } from '../ui/errors.ts'
 
 export default function AdvanceCardCn({ line, open, pending }: { line: Contract<AdvanceLineCn>; open?: Contract<AdvanceCn>; pending: boolean }) {
   const { config, ledger, party } = useOrvane()
@@ -15,14 +15,19 @@ export default function AdvanceCardCn({ line, open, pending }: { line: Contract<
   const [amount, setAmount] = useState(Math.floor(limit * 0.6))
   const [state, setState] = useState<{ busy?: boolean; error?: string }>({})
   const fee = (amount * +l.feeBps) / 10_000
+  const activity = useActivity()
 
   const go = async () => {
     setState({ busy: true })
     try {
-      await ledger.submit([party!], [requestAdvanceCn(party!, config!.operator, line.contractId, amount)])
+      await activity.track(
+        `Wage advance ${fmt(amount)} USDx`,
+        () => ledger.submit([party!], [requestAdvanceCn(party!, config!.operator, line.contractId, amount)]),
+        { detail: `Fee ${fmt(fee)} USDx, repaid from your next payslip`, done: () => ({ detail: `Requested. Repaid automatically on payday, fee ${fmt(fee)} USDx.` }) },
+      )
       setState({})
     } catch (e) {
-      setState({ error: errText(e) })
+      setState({ error: errorText(e) })
     }
   }
 

@@ -3,27 +3,32 @@
 
 import { signalSettled } from '../three/settle.ts'
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { amountOut, priceImpact } from '../../../shared/amm.ts'
 import { HOLDING_V1, Scan, type HoldingView, type InstrumentId } from '../../../shared/amulet.ts'
-import { LedgerError } from '../../../shared/ledger.ts'
 import { X, prepareSwapOrder, registries, sameInstrument, type ExchangePool, type ExchangeReceipt } from '../../../shared/exchange.ts'
 import { VaultStage } from '../three/stage.tsx'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
-import { pick, usePolled } from '../ledger/usePolled.ts'
+import { pick, usePolledState } from '../ledger/usePolled.ts'
 import type { PricePoint } from '../ledger/OrvaneProvider.tsx'
-import { EyeIcon, Panel, Rolling, Sparkline, Tilt, TokenGlyph, fmt, fmtCompact } from '../ui/bits.tsx'
+import { EyeIcon, Panel, Rolling, SkeletonList, Sparkline, Tilt, TokenGlyph, fmt, fmtCompact } from '../ui/bits.tsx'
+import { useActivity } from '../ui/activity.tsx'
+import { errorText } from '../ui/errors.ts'
 
 const SLIPPAGES = [0.5, 1, 3]
 const label = (i: InstrumentId) => (i.id === 'Amulet' ? 'CC' : i.id)
 const glyph = (i: InstrumentId) => (i.id === 'USDx' ? 'USDx' : 'CCx')
+
+const NOT_SETTLED = 'Not settled yet. If the price moved past your minimum, your funds were returned.'
 
 type Phase = { phase: 'idle' | 'signing' | 'settling' | 'done' | 'error'; ref?: string; message?: string; receipt?: ExchangeReceipt }
 
 export default function ExchangeTrade() {
   const { config, ledger, party, persona } = useOrvane()
   const ex = config!.exchange!
-  const rows = usePolled([X.ExchangePool, X.ExchangeReceipt], 1200)
+  const { rows, loaded } = usePolledState([X.ExchangePool, X.ExchangeReceipt], 1200)
+  const activity = useActivity()
+  const tracked = useRef<string | undefined>(undefined)
   const pool = pick<ExchangePool>(rows, 'ExchangePool').find((p) => p.payload.poolId === ex.poolId)
   const receipts = pick<ExchangeReceipt>(rows, 'ExchangeReceipt')
     .filter((r) => r.payload.trader === party)
@@ -91,14 +96,20 @@ export default function ExchangeTrade() {
     const r = receipts.find((x) => x.payload.settlementRef === tx.ref)
     if (r) {
       setTx({ phase: 'done', receipt: r.payload })
+      if (tracked.current) activity.done(tracked.current, { detail: `+${fmt(+r.payload.amountOut, 4)} ${label(r.payload.instrumentOut)}, receipt for you and the operator only` })
+      tracked.current = undefined
       signalSettled(r.payload.instrumentIn.id === 'USDx' ? 'USDx' : 'CCx')
     }
-  }, [receipts, tx])
+  }, [receipts, tx, activity])
   useEffect(() => {
     if (tx.phase !== 'settling') return
-    const t = setTimeout(() => setTx((s) => (s.phase === 'settling' ? { phase: 'error', message: 'Not settled yet. If the price moved past your minimum, your funds were returned.' } : s)), 25_000)
+    const t = setTimeout(() => {
+      setTx((s) => (s.phase === 'settling' ? { phase: 'error', message: NOT_SETTLED } : s))
+      if (tracked.current) activity.fail(tracked.current, NOT_SETTLED)
+      tracked.current = undefined
+    }, 25_000)
     return () => clearTimeout(t)
-  }, [tx.phase])
+  }, [tx.phase, activity])
 
   const balance = (i: InstrumentId) => holdings.filter((h) => sameInstrument(h.view.instrumentId, i) && !h.view.lock).reduce((s, h) => s + +h.view.amount, 0)
   const from = fromCC ? ex.amulet : ex.usdx
@@ -124,13 +135,18 @@ export default function ExchangeTrade() {
   const submit = async () => {
     if (disabled || !party) return
     setTx({ phase: 'signing' })
+    const id = activity.start(`Swap ${fmt(amount)} ${label(from)} for ${label(to)}`)
+    tracked.current = id
     try {
       const reg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
       const order = await prepareSwapOrder({ ledger, reg, trader: party, operator: config!.operator, poolId: ex.poolId, input: from, amount, minOut })
       await ledger.submit([party], [order.command], [], order.disclosed)
       setTx({ phase: 'settling', ref: order.ref })
+      activity.update(id, { detail: 'Signed. Both legs settle in one transaction…' })
     } catch (e) {
-      setTx({ phase: 'error', message: e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e) })
+      setTx({ phase: 'error', message: errorText(e) })
+      activity.fail(id, e)
+      tracked.current = undefined
     }
   }
 
@@ -317,7 +333,7 @@ export default function ExchangeTrade() {
             <span className="muted small">only you and the operator can read these</span>
           </header>
           {receipts.length === 0 ? (
-            <p className="empty">No trades yet.</p>
+            loaded ? <p className="empty">No trades yet.</p> : <SkeletonList rows={3} />
           ) : (
             <ul className="receipt-list">
               <AnimatePresence initial={false}>

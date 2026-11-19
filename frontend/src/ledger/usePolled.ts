@@ -4,8 +4,14 @@ import { useOrvane } from './OrvaneProvider.tsx'
 
 // Active contracts of the given templates, as seen by the current persona.
 export function usePolled(templateIds: readonly string[], intervalMs = 1300): Contract<unknown>[] {
+  return usePolledState(templateIds, intervalMs).rows
+}
+
+// Same, plus whether the first read for this persona has come back yet.
+export function usePolledState(templateIds: readonly string[], intervalMs = 1300) {
   const { ledger, party } = useOrvane()
   const [rows, setRows] = useState<Contract<unknown>[]>([])
+  const [loadedFor, setLoadedFor] = useState<string>()
   const key = templateIds.join('|')
   useEffect(() => {
     if (!party) return
@@ -15,7 +21,10 @@ export function usePolled(templateIds: readonly string[], intervalMs = 1300): Co
     const tick = async () => {
       try {
         const cs = await ledger.query<unknown>(party, key.split('|'))
-        if (alive) setRows(cs)
+        if (alive) {
+          setRows(cs)
+          setLoadedFor(`${party}|${key}`)
+        }
       } catch {
         /* keep last */
       }
@@ -27,7 +36,7 @@ export function usePolled(templateIds: readonly string[], intervalMs = 1300): Co
       clearTimeout(timer)
     }
   }, [ledger, party, key, intervalMs])
-  return rows
+  return { rows, loaded: !!party && loadedFor === `${party}|${key}` }
 }
 
 export const pick = <T,>(rows: Contract<unknown>[], entity: string) =>

@@ -8,6 +8,7 @@ import './index.css'
 import './payments.css'
 import './lending.css'
 import './landing.css'
+import './activity.css'
 import App from './App.tsx'
 
 createRoot(document.getElementById('root')!).render(

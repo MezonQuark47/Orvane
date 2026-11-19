@@ -65,6 +65,8 @@ export interface TxState {
 
 interface OrvaneState {
   status: 'connecting' | 'ready' | 'offline'
+  /** the current persona's contracts have been read at least once */
+  loaded: boolean
   config?: Config
   persona?: Persona
   setPersona: (key: string) => void
@@ -116,6 +118,7 @@ export function OrvaneProvider({ children }: { children: ReactNode }) {
   const [history, setHistory] = useState<PricePoint[]>([])
   const [tx, setTx] = useState<TxState>({ phase: 'idle' })
   const [pulse, setPulse] = useState<OrvaneState['pulse']>(null)
+  const [loadedFor, setLoadedFor] = useState<string>()
   const settleWatch = useRef<{ kind: TxState['kind']; receiptsBefore: Set<string>; lpBefore: Set<string>; since: number } | null>(null)
 
   // ---- config ----
@@ -182,6 +185,7 @@ export function OrvaneProvider({ children }: { children: ReactNode }) {
     const tick = async () => {
       try {
         await refresh()
+        if (alive) setLoadedFor(party)
         if (alive && status === 'offline') setStatus('ready')
       } catch {
         /* sandbox restarting; keep polling */
@@ -340,12 +344,14 @@ export function OrvaneProvider({ children }: { children: ReactNode }) {
 
   const faucet = useCallback(async () => {
     if (!party) return
-    await fetch('/api/faucet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ party }) })
+    const res = await fetch('/api/faucet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ party }) })
+    if (!res.ok) throw new Error(res.status >= 500 ? 'service unavailable' : (await res.text()) || `faucet answered ${res.status}`)
     await refresh()
   }, [party, refresh])
 
   const value: OrvaneState = {
     status,
+    loaded: !!party && loadedFor === party,
     config,
     persona,
     setPersona,

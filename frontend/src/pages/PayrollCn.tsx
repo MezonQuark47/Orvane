@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { amountOut } from '../../../shared/amm.ts'
 import { Scan, type InstrumentId } from '../../../shared/amulet.ts'
-import { createdOf, LedgerError, type Contract } from '../../../shared/ledger.ts'
+import { createdOf, type Contract } from '../../../shared/ledger.ts'
 import { X, allocationSpec, registries, sameInstrument, spendable, type ExchangePool } from '../../../shared/exchange.ts'
 import { ALLOCATION_FACTORY_V1, emptyExtraArgs } from '../../../shared/amulet.ts'
 import { B, repayAdvanceCn, type AdvanceCn, type AdvanceLineCn } from '../../../shared/billing.ts'
@@ -21,8 +21,11 @@ import {
   type PayslipCn,
 } from '../../../shared/treasury.ts'
 import { useOrvane, type Config, type Persona } from '../ledger/OrvaneProvider.tsx'
-import { pick, usePolled } from '../ledger/usePolled.ts'
+import { pick, usePolledState } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, TokenGlyph, fmt } from '../ui/bits.tsx'
+import { errorText } from '../ui/errors.ts'
+import { useActivity } from '../ui/activity.tsx'
+import { SkeletonList } from '../ui/bits.tsx'
 
 const TEMPLATES = [TR.PayeeConsent, TR.PayslipCn, TR.PayrollAttestationCn, TR.PayrollBatch, X.ExchangePool, B.AdvanceCn, B.AdvanceLineCn, CR.CreditMarket] as const
 const label = (i: InstrumentId) => (i.id === 'Amulet' ? 'CC' : i.id)
@@ -30,12 +33,12 @@ const glyph = (i: InstrumentId) => (i.id === 'USDx' ? 'USDx' : 'CCx')
 const DEFAULT_PAY: Record<string, number> = { Alice: 3000, Bob: 2500, Carol: 4200 }
 const exerciseResultOf = (tx: { events: unknown[] }, choice: string) =>
   (tx.events as Array<Record<string, { choice?: string; exerciseResult?: unknown }>>).find((e) => e.ExercisedEvent?.choice === choice)?.ExercisedEvent?.exerciseResult
-const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
 const nameOf = (config: Config, party: string) => config.personas.find((p) => p.party === party)?.name ?? party.split('::')[0]
 
 function useCnData() {
-  const rows = usePolled(TEMPLATES, 1300)
+  const { rows, loaded } = usePolledState(TEMPLATES, 1300)
   return {
+    loaded,
     consents: pick<PayeeConsent>(rows, 'PayeeConsent'),
     payslips: pick<PayslipCn>(rows, 'PayslipCn').sort((a, b) => b.payload.runId.localeCompare(a.payload.runId)),
     attestations: pick<PayrollAttestationCn>(rows, 'PayrollAttestationCn').sort((a, b) => b.payload.runId.localeCompare(a.payload.runId)),
@@ -56,6 +59,7 @@ export function PayrollCnComposer() {
   const cfg = config!
   const ex = cfg.exchange!
   const data = useCnData()
+  const activity = useActivity()
   const employees = cfg.business.employees
   const [amounts, setAmounts] = useState<Record<string, string>>(() =>
     Object.fromEntries(employees.map((e) => [e, String(DEFAULT_PAY[nameOf(cfg, e)] ?? 3000)])),
@@ -88,6 +92,8 @@ export function PayrollCnComposer() {
     if (!party) return
     const runId = `PR-${Date.now().toString(36).toUpperCase()}`
     setStep({ s: 'locking', runId })
+    const paid = rows.filter((r) => r.amount > 0).length
+    const id = activity.start(`Payroll · ${period}`, `Locking ${paid} pay lines, ${fmt(total)} USDx…`)
     try {
       const reg = registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
       const usdxReg = reg.forInstrument(ex.usdx, party)
@@ -137,6 +143,7 @@ export function PayrollCnComposer() {
       const created = createdOf(tx, TR.PayrollBatch)
       if (!created) throw new Error('payroll batch was not created')
       setStep({ s: 'locked', runId })
+      activity.update(id, { detail: 'Lines locked. Releasing them in one transaction…' })
       await new Promise((r) => setTimeout(r, 900)) // let the user see the locked state
       setStep({ s: 'releasing', runId })
       const release = await preparePayrollRelease({
@@ -159,9 +166,11 @@ export function PayrollCnComposer() {
       )
       await ledger.submit([party], [release.command, ...repayCmds], [], [...release.disclosed, ...repayCtx.flatMap((c) => c.disclosed)])
       setStep({ s: 'done', runId })
+      activity.done(id, { detail: `${paid} payslips delivered, ${fmt(total)} USDx` })
       signalSettled('USDx')
     } catch (e) {
-      setStep({ s: 'error', msg: errText(e) })
+      setStep({ s: 'error', msg: errorText(e) })
+      activity.fail(id, e)
     }
   }
 
@@ -267,14 +276,22 @@ export function EmployeePayCn({ persona }: { persona: Persona }) {
   const consent = data.consents.find((c) => c.payload.employee === persona.party)
   const current = consent ? (sameInstrument(consent.payload.receive, ex.amulet) ? 'CC' : 'USDx') : undefined
   const [busy, setBusy] = useState(false)
+  const activity = useActivity()
 
   const choose = async (sym: 'USDx' | 'CC') => {
     if (sym === current) return
     setBusy(true)
     try {
-      await ledger.submit([persona.party], [
-        consentCommand(persona.party, config!.business.employer, config!.operator, sym === 'CC' ? ex.amulet : ex.usdx, consent?.contractId),
-      ])
+      await activity.track(
+        `Get paid in ${sym}`,
+        () =>
+          ledger.submit([persona.party], [
+            consentCommand(persona.party, config!.business.employer, config!.operator, sym === 'CC' ? ex.amulet : ex.usdx, consent?.contractId),
+          ]),
+        { done: () => ({ detail: `Consent signed. Your next pay arrives in ${sym}.` }) },
+      )
+    } catch {
+      /* shown in the toast and Activity */
     } finally {
       setBusy(false)
     }
@@ -287,7 +304,9 @@ export function EmployeePayCn({ persona }: { persona: Persona }) {
           <h2>Payslips</h2>
           <span className="muted small">signed by Acme and you</span>
         </header>
-        {data.payslips.length === 0 ? (
+        {data.payslips.length === 0 && !data.loaded ? (
+          <SkeletonList rows={2} />
+        ) : data.payslips.length === 0 ? (
           <p className="empty">No payslips yet. They appear the moment Acme releases payroll.</p>
         ) : (
           <ul className="slip-list">
@@ -360,7 +379,9 @@ export function AuditorCn() {
           <h2>Payroll attestations</h2>
           <span className="muted small">CIP-56 runs · signed by Acme</span>
         </header>
-        {data.attestations.length === 0 ? (
+        {data.attestations.length === 0 && !data.loaded ? (
+          <SkeletonList rows={2} />
+        ) : data.attestations.length === 0 ? (
           <p className="empty">No payroll runs yet. Switch to Acme and run one.</p>
         ) : (
           <ul className="attest-list">

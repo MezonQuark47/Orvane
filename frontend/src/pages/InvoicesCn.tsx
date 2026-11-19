@@ -4,7 +4,7 @@ import { signalSettled } from '../three/settle.ts'
 import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { Scan, type InstrumentId } from '../../../shared/amulet.ts'
-import { LedgerError, type Contract } from '../../../shared/ledger.ts'
+import { type Contract } from '../../../shared/ledger.ts'
 import { X, allocationSpec, registries, sameInstrument, spendable, type ExchangePool } from '../../../shared/exchange.ts'
 import { emptyExtraArgs } from '../../../shared/amulet.ts'
 import {
@@ -25,19 +25,21 @@ import { createdOf } from '../../../shared/ledger.ts'
 import { newRef, prepareAllocationArgs } from '../../../shared/credit.ts'
 import { amountIn } from '../../../shared/payments.ts'
 import { useOrvane, type Config } from '../ledger/OrvaneProvider.tsx'
-import { pick, usePolled } from '../ledger/usePolled.ts'
-import { Panel, Rolling, fmt } from '../ui/bits.tsx'
+import { pick, usePolledState } from '../ledger/usePolled.ts'
+import { Panel, Rolling, SkeletonList, fmt } from '../ui/bits.tsx'
+import { useActivity } from '../ui/activity.tsx'
+import { errorText } from '../ui/errors.ts'
 
 const TEMPLATES = [B.InvoiceCn, B.PaidInvoiceCn, B.DisputedInvoiceCn, B.InvoiceConversionCn, B.InvoicePaymentCn, X.ExchangePool] as const
-const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
 const nameOf = (config: Config, party: string) => config.personas.find((p) => p.party === party)?.name ?? party.split('::')[0]
 const daysUntil = (iso: string) => Math.round((Date.parse(iso) - Date.now()) / 86_400_000)
 const label = (i: InstrumentId) => (i.id === 'Amulet' ? 'CC' : i.id)
 const BUFFER = 1.003 // slippage buffer for converted payments; any excess stays in the pool
 
 function useInvoices() {
-  const rows = usePolled(TEMPLATES, 1300)
+  const { rows, loaded } = usePolledState(TEMPLATES, 1300)
   return {
+    loaded,
     open: pick<InvoiceCn>(rows, 'InvoiceCn'),
     paid: pick<PaidInvoiceCn>(rows, 'PaidInvoiceCn').sort((a, b) => b.payload.paidAt.localeCompare(a.payload.paidAt)),
     disputed: pick<DisputedInvoiceCn>(rows, 'DisputedInvoiceCn'),
@@ -56,6 +58,7 @@ export function InvoicesCnInbox() {
   const data = useInvoices()
   const [busy, setBusy] = useState<string>()
   const [error, setError] = useState<string>()
+  const activity = useActivity()
   const reg = () => registries(ledger, new Scan(''), ex.realAmulet ? ex.amulet.admin : '')
 
   const ccNeeded = (amount: number) => {
@@ -66,13 +69,13 @@ export function InvoicesCnInbox() {
     return amountIn(+p.feeBps, amount, resIn, resOut)
   }
 
-  const act = async (cid: string, fn: () => Promise<void>) => {
+  const act = async (cid: string, title: string, detail: string, fn: () => Promise<void>) => {
     setBusy(cid)
     setError(undefined)
     try {
-      await fn()
+      await activity.track(title, fn, { detail, done: () => ({ detail }) })
     } catch (e) {
-      setError(errText(e))
+      setError(errorText(e))
     } finally {
       setBusy(undefined)
     }
@@ -80,7 +83,7 @@ export function InvoicesCnInbox() {
 
   // Same currency: lock to the supplier, then settle. Two submissions, one click.
   const payDirect = (inv: Contract<InvoiceCn>) =>
-    act(inv.contractId, async () => {
+    act(inv.contractId, `Pay ${inv.payload.terms.invoiceNo}`, `${fmt(+inv.payload.terms.amount)} ${label(inv.payload.terms.instrument)} to ${nameOf(cfg, inv.payload.supplier)}`, async () => {
       const t = inv.payload.terms
       const r = reg()
       const holdings = await spendable(ledger, party!, t.instrument)
@@ -98,7 +101,7 @@ export function InvoicesCnInbox() {
     })
 
   const payWithCC = (inv: Contract<InvoiceCn>) =>
-    act(inv.contractId, async () => {
+    act(inv.contractId, `Pay ${inv.payload.terms.invoiceNo} with CC`, `Converted through the pool; ${nameOf(cfg, inv.payload.supplier)} receives ${fmt(+inv.payload.terms.amount)} USDx`, async () => {
       const need = ccNeeded(+inv.payload.terms.amount) * BUFFER
       const prep = await prepareAllocationArgs({ ledger, reg: reg(), sender: party!, operator: cfg.operator, instrument: ex.amulet, amount: Math.ceil(need * 1e4) / 1e4, ref: newRef('inv-cc') })
       await ledger.submit([party!], [payInvoiceConverted(inv.contractId, cfg.operator, ex.poolId, prep.fields)], [], prep.disclosed)
@@ -111,7 +114,8 @@ export function InvoicesCnInbox() {
         <h3>Invoices to pay</h3>
         <span className="badge">CIP-56</span>
       </header>
-      {data.open.length === 0 && data.converting.length === 0 && <p className="empty">Nothing due. Nova can issue a new invoice.</p>}
+      {!data.loaded && <SkeletonList rows={2} />}
+      {data.loaded && data.open.length === 0 && data.converting.length === 0 && <p className="empty">Nothing due. Nova can issue a new invoice.</p>}
       <ul className="inv-list">
         <AnimatePresence initial={false}>
           {data.open.map((inv) => {
@@ -139,7 +143,7 @@ export function InvoicesCnInbox() {
                   <button className="chip-btn cc" disabled={!!busy || !Number.isFinite(cc)} onClick={() => payWithCC(inv)} title="Converted through the pool; the supplier still receives USDx">
                     Pay ≈ {fmt(cc, 0)} CC
                   </button>
-                  <button className="chip-btn ghosty" disabled={!!busy} onClick={() => act(inv.contractId, () => ledger.submit([party!], [disputeInvoiceCn(inv.contractId, 'Quantities do not match the delivery note')]).then(() => undefined))}>
+                  <button className="chip-btn ghosty" disabled={!!busy} onClick={() => act(inv.contractId, `Dispute ${t.invoiceNo}`, 'Sent back to the supplier', () => ledger.submit([party!], [disputeInvoiceCn(inv.contractId, 'Quantities do not match the delivery note')]).then(() => undefined))}>
                     Dispute
                   </button>
                 </div>
@@ -187,6 +191,7 @@ export function SupplierDeskCn() {
   const cfg = config!
   const ex = cfg.exchange!
   const data = useInvoices()
+  const activity = useActivity()
   const [memo, setMemo] = useState('Pallet racking, 40 units')
   const [raw, setRaw] = useState('4800')
   const [days, setDays] = useState(30)
@@ -199,12 +204,12 @@ export function SupplierDeskCn() {
   const issue = async () => {
     setState({ busy: true })
     try {
-      await ledger.submit([party!], [
+      await activity.track(`Invoice ${nextNo}`, () => ledger.submit([party!], [
         issueInvoiceCn(party!, cfg.business.employer, { invoiceNo: nextNo, memo, amount, instrument: ex.usdx, dueDate: new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10) }),
-      ])
+      ]), { detail: `${fmt(amount)} USDx to Acme`, done: () => ({ detail: `${fmt(amount)} USDx sent to Acme, visible to Acme only` }) })
       setState({ ok: `${nextNo} sent to Acme. Only Acme can see it.` })
     } catch (e) {
-      setState({ error: errText(e) })
+      setState({ error: errorText(e) })
     }
   }
 

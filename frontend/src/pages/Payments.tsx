@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useState } from 'react'
 import { amountOut } from '../../../shared/amm.ts'
 import type { Contract } from '../../../shared/ledger.ts'
-import { LedgerError } from '../../../shared/ledger.ts'
 import {
   P,
   amountIn,
@@ -28,6 +27,7 @@ import { AuditorCn, EmployeePayCn, PayrollCnComposer } from './PayrollCn.tsx'
 import { InvoicesCnInbox, SupplierDeskCn } from './InvoicesCn.tsx'
 import { pick, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, TokenGlyph, fmt } from '../ui/bits.tsx'
+import { errorText } from '../ui/errors.ts'
 
 // ---------- data ----------
 
@@ -79,8 +79,6 @@ function usePayData(): PayData {
   }, [ledger, party])
   return data
 }
-
-const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
 
 const nameOf = (config: Config, party: string) => config.personas.find((p) => p.party === party)?.name ?? party.split('::')[0]
 
@@ -202,7 +200,7 @@ function PayrollComposer({ data, config }: { data: PayData; config: Config }) {
       }
       setState({ phase: 'done', runId })
     } catch (e) {
-      setState({ phase: 'error', msg: errText(e) })
+      setState({ phase: 'error', msg: errorText(e) })
     }
   }
 
@@ -300,7 +298,7 @@ function InvoicesInbox({ data, config }: { data: PayData; config: Config }) {
     try {
       await submit(cmd)
     } catch (e) {
-      setError(errText(e))
+      setError(errorText(e))
     } finally {
       setBusy(undefined)
     }
@@ -438,7 +436,7 @@ function SupplierView({ data, config }: { data: PayData; config: Config }) {
       ])
       setState({ ok: `${nextNo} sent to Acme` })
     } catch (e) {
-      setState({ error: errText(e) })
+      setState({ error: errorText(e) })
     }
   }
 

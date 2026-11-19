@@ -2,6 +2,8 @@ import * as Tooltip from '@radix-ui/react-tooltip'
 import { LayoutGroup, motion } from 'motion/react'
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { OrvaneProvider, useOrvane } from './ledger/OrvaneProvider.tsx'
+import { ActivityDock, ActivityProvider, Toasts } from './ui/activity.tsx'
+import { PageSkeleton } from './ui/bits.tsx'
 import Holdings from './pages/Holdings.tsx'
 import Landing from './pages/Landing.tsx'
 import Lens from './pages/Lens.tsx'
@@ -29,9 +31,11 @@ type Tab = (typeof TABS)[number]['key'] | 'home'
 export default function App() {
   return (
     <OrvaneProvider>
-      <Tooltip.Provider delayDuration={200}>
-        <Shell />
-      </Tooltip.Provider>
+      <ActivityProvider>
+        <Tooltip.Provider delayDuration={200}>
+          <Shell />
+        </Tooltip.Provider>
+      </ActivityProvider>
     </OrvaneProvider>
   )
 }
@@ -125,18 +129,23 @@ function Shell() {
             />
             {/* Enter-only transition: a keyed remount can't get stuck waiting on an exit. */}
             <motion.div
-              key={`${tab}-${persona?.key ?? ''}`}
+              key={`${tab}-${persona?.key ?? ''}-${tab !== 'home' && status}`}
               initial={{ opacity: 0, y: 14, filter: 'blur(6px)' }}
               animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
               transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
             >
               {tab === 'home' && <Landing go={go} />}
-              {tab === 'trade' && (config?.exchange ? <ExchangeTrade /> : <Trade />)}
-              {tab === 'liquidity' && <Liquidity />}
-              {tab === 'payments' && <Payments />}
-              {tab === 'lending' && (config?.exchange?.creditMarketId ? <LendingCn /> : <Lending />)}
-              {tab === 'lens' && <Lens />}
-              {tab === 'holdings' && <Holdings />}
+              {tab !== 'home' && status === 'connecting' && <PageSkeleton />}
+              {status === 'ready' && (
+                <>
+                  {tab === 'trade' && (config?.exchange ? <ExchangeTrade /> : <Trade />)}
+                  {tab === 'liquidity' && <Liquidity />}
+                  {tab === 'payments' && <Payments />}
+                  {tab === 'lending' && (config?.exchange?.creditMarketId ? <LendingCn /> : <Lending />)}
+                  {tab === 'lens' && <Lens />}
+                  {tab === 'holdings' && <Holdings />}
+                </>
+              )}
             </motion.div>
           </main>
         )}
@@ -148,6 +157,9 @@ function Shell() {
           <span className={`live ${status}`} aria-hidden />
         </footer>
       </div>
+
+      <Toasts />
+      <ActivityDock hidden={tab === 'home' || status !== 'ready'} />
     </>
   )
 }

@@ -1,7 +1,7 @@
 import { VaultStage } from '../three/stage.tsx'
 import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
-import { LedgerError, type Contract } from '../../../shared/ledger.ts'
+import { type Contract } from '../../../shared/ledger.ts'
 import {
   L,
   addCollateral,
@@ -30,10 +30,10 @@ import {
 import { useOrvane, type Config } from '../ledger/OrvaneProvider.tsx'
 import { pick, useNow, usePolled } from '../ledger/usePolled.ts'
 import { EyeIcon, Panel, Rolling, Tilt, TokenGlyph, fmt, fmtCompact } from '../ui/bits.tsx'
+import { errorText } from '../ui/errors.ts'
 
 const TEMPLATES = [L.LendingMarket, L.SupplyPosition, L.Loan, L.LoanClosed, L.AdvanceLine, L.Advance, L.BorrowRequest, L.SupplyRequest, L.AdvanceRequest] as const
 
-const errText = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e))
 const pct = (bps: number) => `${fmt(bps / 100, 2)}%`
 
 interface Ctx {
@@ -271,7 +271,7 @@ function BorrowCard({ ctx }: { ctx: Ctx }) {
       ])
       setState({ ok: 'Borrow request signed. The operator is settling it…' })
     } catch (e) {
-      setState({ error: errText(e) })
+      setState({ error: errorText(e) })
     }
   }
 
@@ -397,7 +397,7 @@ function LoanCard({ loan, ctx }: { loan: Contract<Loan>; ctx: Ctx }) {
     try {
       await fn()
     } catch (e) {
-      setError(errText(e))
+      setError(errorText(e))
     } finally {
       setBusy(undefined)
     }
@@ -465,7 +465,7 @@ function SupplyCard({ ctx }: { ctx: Ctx }) {
       await submit(cmd)
       setState({})
     } catch (e) {
-      setState({ error: errText(e) })
+      setState({ error: errorText(e) })
     }
   }
 
@@ -520,7 +520,7 @@ function AdvanceCard({ ctx, line }: { ctx: Ctx; line: Contract<AdvanceLine> }) {
       await submit([requestAdvance(party!, ctx.config.operator, line.contractId, amount)])
       setState({})
     } catch (e) {
-      setState({ error: errText(e) })
+      setState({ error: errorText(e) })
     }
   }
 
@@ -596,7 +596,7 @@ function AdvanceLines({ ctx }: { ctx: Ctx }) {
           const l = line.payload
           const adv = ctx.advances.find((a) => a.payload.employee === l.employee)
           const change = (delta: number) =>
-            submit([setAdvanceLimit(line.contractId, Math.max(0, +l.limit + delta))]).catch((e) => setError(errText(e)))
+            submit([setAdvanceLimit(line.contractId, Math.max(0, +l.limit + delta))]).catch((e) => setError(errorText(e)))
           return (
             <li key={line.contractId}>
               <span>{name(l.employee)}</span>

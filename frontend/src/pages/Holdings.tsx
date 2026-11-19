@@ -3,10 +3,12 @@ import { motion } from 'motion/react'
 import { useState } from 'react'
 import { useOrvane } from '../ledger/OrvaneProvider.tsx'
 import { connectLoop, type LoopSession } from '../ledger/loop.ts'
-import { Panel, Rolling, TokenGlyph, fmt, shortParty } from '../ui/bits.tsx'
+import { Panel, Rolling, SkeletonList, TokenGlyph, fmt, shortParty } from '../ui/bits.tsx'
+import { useActivity } from '../ui/activity.tsx'
 
 export default function Holdings() {
-  const { balances, tokens, faucet, pool, party, persona } = useOrvane()
+  const { balances, tokens, faucet, pool, party, persona, loaded } = useOrvane()
+  const activity = useActivity()
   const [dripping, setDripping] = useState(false)
   const [loopState, setLoopState] = useState<{ session?: LoopSession; error?: string; busy?: boolean }>({})
   const total = balances.USDx + balances.CCx * (pool?.price ?? 0)
@@ -48,7 +50,11 @@ export default function Holdings() {
           disabled={dripping}
           onClick={async () => {
             setDripping(true)
-            await faucet()
+            try {
+              await activity.track('Test funds', faucet, { detail: '1,000 USDx + 5,000 CCx', done: () => ({ detail: '1,000 USDx + 5,000 CCx minted to you' }) })
+            } catch {
+              /* shown in the toast and Activity */
+            }
             setTimeout(() => setDripping(false), 1200)
           }}
         >
@@ -71,7 +77,7 @@ export default function Holdings() {
                 <span className="obs small">{t.payload.observers.length ? `shared with ${t.payload.observers.length}` : 'private'}</span>
               </li>
             ))}
-            {tokens.length === 0 && <li className="empty">No holdings yet.</li>}
+            {tokens.length === 0 && (loaded ? <li className="empty">No holdings yet.</li> : <li className="empty"><SkeletonList rows={2} /></li>)}
           </ul>
         </Panel>
 
