@@ -205,3 +205,14 @@ export function ConnectFirst({ what }: { what: string }) {
     </button>
   )
 }
+
+// Any token: the vault's own glyph for Canton Coin and dollar tokens, a
+// lettered seal for everything else.
+export function TokenIcon({ symbol, size = 24 }: { symbol: string; size?: number }) {
+  if (symbol === 'CC' || /usd/i.test(symbol)) return <TokenGlyph symbol={glyphFor(symbol)} size={size} />
+  return (
+    <span className="glyph glyph-other" style={{ width: size, height: size, fontSize: size * 0.34 }} aria-hidden>
+      {symbol.replace(/[^A-Za-z0-9]/g, '').slice(0, 4)}
+    </span>
+  )
+}

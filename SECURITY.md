@@ -1,10 +1,51 @@
 # Security and trust model
 
-Orvane is a prototype. It runs on Canton LocalNet and has not been audited. This page says what the
-contracts guarantee, what you have to trust the operator for, and what each party can see, so you
-can judge it for yourself.
+Orvane is not audited. This page says what you trust when you use it, and what each party can see,
+so you can judge it for yourself.
 
-## Parties
+## Swaps through Cantex (TestNet, MainNet)
+
+**What Orvane is.** A web app that runs in your browser. It has no server, no account and no
+contracts on the swap path, and it never holds keys or funds. It reads market data from Cantex's
+public API and your own contracts through your wallet.
+
+**What a swap is.** One token-standard transfer from your wallet to Cantex's swap party
+(`cantex-swap::…`), with the token you want back as the memo. Your wallet shows it and you sign it.
+Cantex fills it from its pools and sends the output back to your wallet.
+
+**What you trust Cantex for.** To fill the swap at its pool price and send the output back. Cantex
+fills at the price in effect when your transfer arrives; its quote is not binding and Connect has
+no minimum-output limit today. If Cantex cannot fill a swap, the transfer stays pending and your
+wallet can withdraw it.
+
+**What Orvane does about that.** Before asking for your signature it:
+
+- recomputes the expected output from the pools' public reserves and refuses the swap if Cantex's
+  quote does not match them (checked across every quotable pair on TestNet and MainNet);
+- quotes again and refuses if the output fell below the limit you set;
+- warns when the pool's price is far from Canton Coin's market price;
+- checks your balance, Cantex's minimum and whether your wallet can receive the output token.
+
+These checks run before signing. Between signing and Cantex's fill (usually a few seconds) the
+price can still move; only a minimum-output field in Connect would close that gap, and Orvane has
+asked Cantex for one.
+
+**Swap parties.** MainNet: the party Cantex documents. TestNet: Cantex's party name in Cantex's
+TestNet namespace, read from its pool proofs and marked as inferred in `shared/networks.ts` until
+Cantex confirms it. A wrong id would make the transfer fail (no such party), not send funds elsewhere.
+
+**Who sees what.** Orvane: nothing. Cantex: your transfer (party, token, amount) and the swap it
+fills. The token's registry: transfers of its own token, as with any Canton token. Everyone else:
+pool reserves, prices and aggregate volumes only. Your swap history is kept in your browser.
+
+**Supply chain.** The wallet SDKs (Digital Asset's dApp SDK, Five North's Loop SDK) are pinned and
+`npm audit` is clean; a vulnerable transitive `uuid` is overridden to a fixed version.
+
+## The Orvane pool (LocalNet, kept for later)
+
+Orvane's own pool runs only on LocalNet. The rest of this page describes it.
+
+### Parties
 
 | Party | Role |
 |---|---|
@@ -16,7 +57,7 @@ can judge it for yourself.
 Orvane never holds anyone's keys. Every user action is signed in the user's own wallet (CIP-0103),
 and the app reads a user's contracts through that wallet, never with ledger credentials of its own.
 
-## What the contracts guarantee
+### What the contracts guarantee
 
 **Traders** (`daml/orvane/daml/Orvane/Dex/Orders.daml`)
 
@@ -46,7 +87,7 @@ and the app reads a user's contracts through that wallet, never with ledger cred
   expires the allocation at its deadline and its automation unlocks the funds without anyone acting.
   The LocalNet test token has no expiry, so there the LP takes the funds back from Portfolio.
 
-## What you trust the operator for
+### What you trust the operator for
 
 The operator is the executor of every allocation in a pool. The token standard lets an executor
 settle an iterated allocation with legs it chooses, so during a position's term the LP trusts the
@@ -63,7 +104,7 @@ settlement of an LP's allocation is a transaction the LP is a stakeholder of, so
 own node as evidence, and the asset's registry sees it too. Removing this trust is on the roadmap:
 a second executor that must co-sign each settlement, or settlement only through the pool contract.
 
-## What each party can see
+### What each party can see
 
 | | You | Other traders | Other LPs | Operator | Registry of the asset | Public |
 |---|---|---|---|---|---|---|
@@ -76,7 +117,7 @@ Every leg of a swap runs through the operator, so traders and LPs never appear i
 allocations or transactions. The operator's public API returns pool terms, reserves and recent
 fills (time, price, size) and nothing about parties or positions.
 
-## LocalNet only
+### LocalNet only
 
 - LocalNet participants accept tokens signed with the well-known secret `unsafe`. The scripts use it;
   never use them, or that secret, against a real network.
@@ -85,7 +126,7 @@ fills (time, price, size) and nothing about parties or positions.
   own registry, and Canton Coin's is Scan.
 - `scripts/fund-localnet.ps1` hands out test funds. It does not exist on real networks.
 
-## Known limits
+### Known limits
 
 - At most 20 positions per pool: every swap settles every position, and registries only promise
   batches of about 50 allocations.

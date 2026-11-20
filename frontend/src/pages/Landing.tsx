@@ -6,6 +6,8 @@ import { motion } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toNumber } from '../../../shared/decimal.ts'
 import { useDex } from '../ledger/dex.tsx'
+import { NETWORK } from '../ledger/network.ts'
+import { useMarket } from '../swap/market.tsx'
 import { VaultStage, type StageScene } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
 import { fmtCompact } from '../ui/bits.tsx'
@@ -19,7 +21,7 @@ export default function Landing({ go }: { go: Go }) {
   return (
     <div className="landing">
       <Hero go={go} />
-      {CHAPTERS.map((c, i) => (
+      {(NETWORK.cantex ? SWAP_CHAPTERS : CHAPTERS).map((c, i) => (
         <Chapter key={c.id} chapter={c} flip={i % 2 === 1} go={go} />
       ))}
       <Privacy go={go} />
@@ -30,10 +32,15 @@ export default function Landing({ go }: { go: Go }) {
 
 // ---------------------------------------------------------------- hero
 
-const HEADLINE = [
-  ['Liquidity', 'that', 'never'],
-  ['leaves', 'your', 'wallet.'],
-]
+const HEADLINE = NETWORK.cantex
+  ? [
+      ['Swap', 'on', 'Canton,'],
+      ['checked', 'twice.'],
+    ]
+  : [
+      ['Liquidity', 'that', 'never'],
+      ['leaves', 'your', 'wallet.'],
+    ]
 
 function Hero({ go }: { go: Go }) {
   // one settle-pulse once the headline has landed, so the vault says hello
@@ -47,7 +54,7 @@ function Hero({ go }: { go: Go }) {
     <section className="ln-hero">
       <VaultStage scene="hero" className="ln-hero-stage" />
       <motion.p className="ln-kicker" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, ease, delay: 0.2 }}>
-        <span className="ln-pip" /> The private exchange on the Canton Network
+        <span className="ln-pip" /> {NETWORK.cantex ? 'Swaps on the Canton Network, from your own wallet' : 'The private exchange on the Canton Network'}
       </motion.p>
       <h1 className="ln-mega">
         {HEADLINE.map((line, li) => (
@@ -68,7 +75,9 @@ function Hero({ go }: { go: Go }) {
       </h1>
       <motion.div className="ln-hero-foot" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, ease, delay: 1.1 }}>
         <p className="ln-lede">
-          Swap Canton Coin in one atomic transaction that only you and the operator can read. Provide liquidity without handing it to anyone: it stays in your account, and comes back on its own at the end of its term.
+          {NETWORK.cantex
+            ? "Any token Cantex lists, straight from your wallet into Canton's deepest pools. Orvane prices every swap itself and re-checks it the moment before you sign. No account, no fee, nothing kept."
+            : 'Swap Canton Coin in one atomic transaction that only you and the operator can read. Provide liquidity without handing it to anyone: it stays in your account, and comes back on its own at the end of its term.'}
         </p>
         <div className="ln-ctas">
           <button className="ln-btn" onClick={() => go('swap')}>
@@ -105,6 +114,26 @@ function ago(ms: number) {
 }
 
 function Ticker() {
+  return NETWORK.cantex ? <MarketTicker /> : <PoolTicker />
+}
+
+// Cantex's market, live: what Orvane swaps against.
+function MarketTicker() {
+  const market = useMarket()
+  const ref = NETWORK.cantex ? market.prices[NETWORK.cantex.referenceMarket] : undefined
+  const depth = market.pools.reduce((s, p) => s + Number(p.tvlCc), 0)
+  return (
+    <motion.div className="ln-ticker" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 1.2, delay: 1.5 }}>
+      <Stat k="Network" v={NETWORK.label} live={market.status === 'ready'} />
+      <Stat k="Tokens" v={market.tokens.length ? String(market.tokens.length) : '—'} />
+      <Stat k="Pool depth" v={depth ? `${fmtCompact(depth)} CC` : '—'} />
+      <Stat k="Canton Coin" v={ref ? `${ref.price.toLocaleString('en-US', { maximumSignificantDigits: 4 })} USDC` : '—'} />
+      <Stat k="Orvane fee" v="0" accent />
+    </motion.div>
+  )
+}
+
+function PoolTicker() {
   const { status, config, instrument } = useDex()
   const live = usePoolPulse()
   const pool = config?.pools[0]
@@ -223,6 +252,100 @@ function LiquidityCard() {
   )
 }
 
+// What a swap of Canton Coin gets right now, from Cantex's live pools.
+function RouteCard() {
+  const market = useMarket()
+  const cc = market.cc
+  const pool = cc ? market.pools.find((p) => p.a.id === cc.id || p.b.id === cc.id) : undefined
+  const other = pool && cc ? (pool.a.id === cc.id ? pool.b : pool.a) : undefined
+  const price = pool && cc ? (pool.a.id === cc.id ? Number(pool.reserveB) / Number(pool.reserveA) : Number(pool.reserveA) / Number(pool.reserveB)) : undefined
+  return (
+    <div className="ln-card">
+      <div className="ln-card-head">
+        <span>From your wallet</span>
+        <Seal>straight to the pool</Seal>
+      </div>
+      <div className="ln-big">
+        1 <small>CC</small>
+      </div>
+      <div className="ln-arrow" />
+      <div className="ln-big brass">
+        {price === undefined ? '—' : price.toLocaleString('en-US', { maximumSignificantDigits: 6 })} <small>{other?.symbol ?? ''}</small>
+      </div>
+      <div className="ln-row">
+        <span>{market.tokens.length} tokens · {market.pools.length} pools</span>
+        <span>Orvane fee 0</span>
+      </div>
+    </div>
+  )
+}
+
+// The checks every swap goes through before the wallet is asked to sign.
+function ChecksCard() {
+  return (
+    <div className="ln-card">
+      <div className="ln-card-head">
+        <span>Before you sign</span>
+        <Seal>every swap</Seal>
+      </div>
+      <div className="ln-row">
+        <span>Orvane's own pricing</span>
+        <span className="verd">matches the pools</span>
+      </div>
+      <div className="ln-row">
+        <span>Fresh quote vs. the one you saw</span>
+        <span>within your limit</span>
+      </div>
+      <div className="ln-row">
+        <span>Pool price vs. market price</span>
+        <span>flagged if far off</span>
+      </div>
+      <div className="ln-row">
+        <span>Can your wallet receive it</span>
+        <span>checked</span>
+      </div>
+    </div>
+  )
+}
+
+const SWAP_CHAPTERS: ChapterData[] = [
+  {
+    id: 'swap',
+    n: 'I',
+    scene: 'trade',
+    tab: 'swap',
+    open: 'Start swapping',
+    kicker: 'Swap',
+    title: (
+      <>
+        Your wallet,
+        <br />
+        <em>Canton's deepest pools.</em>
+      </>
+    ),
+    body: "Pick any token Cantex lists and swap it from the wallet you already use. Your wallet sends it straight to Cantex's pools and the output comes straight back. Orvane never holds anything and charges nothing.",
+    Card: RouteCard,
+  },
+  {
+    id: 'checks',
+    n: 'II',
+    scene: 'liquidity',
+    tab: 'swap',
+    open: 'See a quote',
+    lift: 0.35,
+    kicker: 'Checked twice',
+    title: (
+      <>
+        A price you can trust,
+        <br />
+        <em>the moment you sign.</em>
+      </>
+    ),
+    body: "Cantex fills a swap at the pool price when it arrives. So Orvane prices every swap itself from the pools, compares it with Cantex's quote, and quotes again right before you sign. If the price moved past your limit, nothing is sent.",
+    Card: ChecksCard,
+  },
+]
+
 const CHAPTERS: ChapterData[] = [
   {
     id: 'swap',
@@ -293,13 +416,20 @@ function Chapter({ chapter: c, flip, go }: { chapter: ChapterData; flip: boolean
 
 // ---------------------------------------------------------------- privacy
 
-const WHO = ['You', 'Other traders', 'Other LPs', 'Operator', 'Everyone else']
-const WHAT: [string, boolean[]][] = [
-  ['That you traded, and how much', [true, false, false, true, false]],
-  ['Your liquidity position', [true, false, false, true, false]],
-  ['Who was on the other side', [false, false, false, true, false]],
-  ['Pool reserves and price', [true, true, true, true, true]],
-]
+const WHO = NETWORK.cantex ? ['You', 'Orvane', 'Cantex', 'Token registry', 'Everyone else'] : ['You', 'Other traders', 'Other LPs', 'Operator', 'Everyone else']
+const WHAT: [string, boolean[]][] = NETWORK.cantex
+  ? [
+      ['That you swapped, and how much', [true, false, true, true, false]],
+      ['The rest of your wallet', [true, false, false, false, false]],
+      ['Your swap history', [true, false, true, false, false]],
+      ['Pool reserves and prices', [true, true, true, true, true]],
+    ]
+  : [
+      ['That you traded, and how much', [true, false, false, true, false]],
+      ['Your liquidity position', [true, false, false, true, false]],
+      ['Who was on the other side', [false, false, false, true, false]],
+      ['Pool reserves and price', [true, true, true, true, true]],
+    ]
 
 function Privacy({ go }: { go: Go }) {
   const [col, setCol] = useState<number | null>(null)
@@ -347,8 +477,9 @@ function Privacy({ go }: { go: Go }) {
           ))}
         </div>
         <p className="ln-note">
-          On Canton a party only receives the parts of a transaction it is a stakeholder in, and Orvane routes every leg through the operator, so
-          traders and providers never meet. As with any token, an asset's registry also sees transfers of its own asset.{' '}
+          {NETWORK.cantex
+            ? 'On Canton a party only receives the parts of a transaction it is part of. Your swap is a transfer from your wallet to Cantex; Orvane is not in it and keeps no record of it.'
+            : 'On Canton a party only receives the parts of a transaction it is a stakeholder in, and Orvane routes every leg through the operator, so traders and providers never meet. As with any token, an asset’s registry also sees transfers of its own asset.'}{' '}
           <button className="ln-inline" onClick={() => go('privacy')}>
             See it live on your own node →
           </button>
@@ -378,7 +509,7 @@ function Finale({ go }: { go: Go }) {
             Enter the vault <Arrow />
           </button>
           <a className="ln-ghost" href={REPO} target="_blank" rel="noreferrer">
-            Read the Daml ↗
+            {NETWORK.cantex ? 'Read the code ↗' : 'Read the Daml ↗'}
           </a>
         </div>
       </motion.div>

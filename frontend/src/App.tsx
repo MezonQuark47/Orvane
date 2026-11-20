@@ -13,28 +13,35 @@ import Landing from './pages/Landing.tsx'
 import Liquidity from './pages/Liquidity.tsx'
 import Portfolio from './pages/Portfolio.tsx'
 import Privacy from './pages/Privacy.tsx'
+import PoolSwap from './pages/PoolSwap.tsx'
 import Swap from './pages/Swap.tsx'
+import { NETWORK } from './ledger/network.ts'
+import { MarketProvider, useMarket } from './swap/market.tsx'
 
 const Vault = lazy(() => import('./three/Vault.tsx'))
 import type { VaultScene } from './three/Vault.tsx'
 
-const TABS = [
+const ALL_TABS = [
   { key: 'swap', label: 'Swap', scene: 'trade' },
   { key: 'liquidity', label: 'Liquidity', scene: 'liquidity' },
   { key: 'portfolio', label: 'Portfolio', scene: 'holdings' },
   { key: 'privacy', label: 'Privacy', scene: 'lens' },
 ] as const
+// Liquidity is the Orvane pool, kept for later; it only shows where the pool runs (LocalNet).
+const TABS = ALL_TABS.filter((t) => t.key !== 'liquidity' || NETWORK.pool)
 // 'home' is the landing; it has no tab of its own, the wordmark leads there
-export type Tab = (typeof TABS)[number]['key'] | 'home'
+export type Tab = (typeof ALL_TABS)[number]['key'] | 'home'
 
 export default function App() {
   return (
     <DexProvider>
+      <MarketProvider>
       <ActivityProvider>
         <Tooltip.Provider delayDuration={200}>
           <Shell />
         </Tooltip.Provider>
       </ActivityProvider>
+      </MarketProvider>
     </DexProvider>
   )
 }
@@ -46,6 +53,7 @@ function readTab(): Tab {
 
 function Shell() {
   const { status, config, pools, pulse, mine } = useDex()
+  const market = useMarket()
   const [tab, setTab] = useState<Tab>(readTab)
   useEffect(() => {
     const on = () => setTab(readTab())
@@ -79,7 +87,7 @@ function Shell() {
     return { a: Math.min(1.4, Math.max(0.6, first.price / price)), b: Math.min(1.4, Math.max(0.6, price / first.price)) }
   }, [live])
 
-  const scene: VaultScene = tab === 'home' ? 'hero' : TABS.find((t) => t.key === tab)!.scene
+  const scene: VaultScene = tab === 'home' ? 'hero' : (TABS.find((t) => t.key === tab)?.scene ?? 'trade')
   const incoming = mine.incoming.length
 
   return (
@@ -119,7 +127,7 @@ function Shell() {
           <WalletButton />
         </header>
 
-        {status === 'offline' && tab !== 'home' ? (
+        {(status === 'offline' || market.status === 'offline') && tab !== 'home' ? (
           <Offline />
         ) : (
           <main className={tab === 'home' ? 'is-landing' : undefined}>
@@ -143,8 +151,8 @@ function Shell() {
               {tab !== 'home' && status === 'connecting' && <PageSkeleton />}
               {status === 'ready' && (
                 <>
-                  {tab === 'swap' && <Swap />}
-                  {tab === 'liquidity' && <Liquidity />}
+                  {tab === 'swap' && (NETWORK.cantex ? <Swap /> : <PoolSwap />)}
+                  {tab === 'liquidity' && NETWORK.pool && <Liquidity />}
                   {tab === 'portfolio' && <Portfolio />}
                   {tab === 'privacy' && <Privacy />}
                 </>
@@ -156,7 +164,7 @@ function Shell() {
         <footer className="foot">
           <span>Daml · Canton Network · token standard V2</span>
           <span className="sep" />
-          <span>{status === 'ready' ? `Connected to ${networkName(config?.network)}` : status === 'connecting' ? 'Connecting…' : 'Operator offline'}</span>
+          <span>{status === 'ready' && market.status !== 'offline' ? `${NETWORK.label}${NETWORK.cantex ? ' · Cantex liquidity' : ''}` : status === 'connecting' ? 'Connecting…' : 'Offline'}</span>
           <span className={`live ${status}`} aria-hidden />
         </footer>
       </div>
@@ -168,7 +176,6 @@ function Shell() {
   )
 }
 
-const networkName = (n?: string) => (n === 'localnet' ? 'Canton LocalNet' : n === 'devnet' ? 'Canton DevNet' : n === 'mainnet' ? 'Canton MainNet' : n ?? 'the network')
 
 function WalletButton() {
   const { wallet, disconnect } = useDex()
@@ -205,7 +212,7 @@ function WalletButton() {
 
 // The wallets that speak CIP-0103 on this network.
 function ConnectDialog() {
-  const { config, connect, wallet } = useDex()
+  const { connect, wallet } = useDex()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string>()
   useEffect(() => {
@@ -220,21 +227,35 @@ function ConnectDialog() {
     if (wallet.phase === 'connected') setOpen(false)
   }, [wallet.phase])
 
-  const localnet = config?.network === 'localnet'
+  // a CIP-0103 browser-extension wallet, if one is installed
+  const [extension, setExtension] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    import('./ledger/wallet.ts').then((w) => w.extensionAvailable().then(setExtension), () => setExtension(false))
+  }, [open])
+
+  const customGateway = !!import.meta.env.VITE_WALLET_GATEWAY_URL
   const options: Array<{ kind: WalletKind; name: string; detail: string; available: boolean; note?: string }> = [
-    {
-      kind: 'gateway',
-      name: 'Wallet Gateway',
-      detail: 'The Canton Foundation’s reference wallet. Runs next to LocalNet.',
-      available: localnet,
-      note: localnet ? GATEWAY_URL.replace(/\/api.*$/, '') : 'for LocalNet',
-    },
     {
       kind: 'loop',
       name: 'Loop',
-      detail: 'Five North’s wallet for Canton DevNet and MainNet.',
-      available: !localnet,
-      note: localnet ? 'on DevNet and MainNet' : undefined,
+      detail: 'Five North’s Canton wallet. Swaps any token Cantex lists.',
+      available: !!NETWORK.loop,
+      note: NETWORK.loop ? `Loop ${NETWORK.loop}` : 'on TestNet and MainNet',
+    },
+    {
+      kind: 'extension',
+      name: 'Browser wallet',
+      detail: 'Any CIP-0103 wallet installed in this browser.',
+      available: extension,
+      note: extension ? 'detected' : 'none installed',
+    },
+    {
+      kind: 'gateway',
+      name: 'Wallet Gateway',
+      detail: NETWORK.gateway ? 'The reference CIP-0103 wallet, running next to LocalNet.' : 'Your organisation’s CIP-0103 Wallet Gateway.',
+      available: NETWORK.gateway || customGateway,
+      note: NETWORK.gateway || customGateway ? GATEWAY_URL.replace(/\/api.*$/, '') : 'set VITE_WALLET_GATEWAY_URL',
     },
   ]
   const pick = async (kind: WalletKind) => {

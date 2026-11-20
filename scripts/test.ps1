@@ -1,4 +1,4 @@
-# Build all Daml packages and run the Daml Script test suite.
+# Build all Daml packages, run the Daml Script suite and the TypeScript unit tests.
 # Usage (from repo root):  ./scripts/test.ps1
 $ErrorActionPreference = 'Stop'
 
@@ -15,3 +15,7 @@ try {
 } finally {
     Pop-Location
 }
+
+# TypeScript unit tests (quote engine against captured Cantex quotes)
+Push-Location $root
+try { node --test (Get-ChildItem shared -Filter *.test.ts).FullName } finally { Pop-Location }

@@ -28,6 +28,7 @@ import {
 } from '../../../shared/dex.ts'
 import { HttpRegistry, type Registry } from '../../../shared/registry.ts'
 import type { WalletKind, WalletSession } from './wallet.ts'
+import { NETWORK } from './network.ts'
 
 export interface Instrument extends InstrumentId {
   key: string
@@ -75,6 +76,7 @@ export interface Incoming {
   instrument: InstrumentId
   amount: Dec
   sender: string | null
+  receiver: string | null
   executeBefore: string
 }
 
@@ -103,10 +105,12 @@ export interface Mine {
   rejections: Contract<RequestRejected>[]
   closed: Contract<PositionClosed>[]
   incoming: Incoming[]
+  /** transfers you sent that the receiver has not taken yet (e.g. a swap Cantex has not filled) */
+  outgoing: Incoming[]
   allocations: Allocation[]
 }
 
-const EMPTY: Mine = { holdings: [], positions: [], receipts: [], swaps: [], deposits: [], withdrawals: [], renewals: [], rejections: [], closed: [], incoming: [], allocations: [] }
+const EMPTY: Mine = { holdings: [], positions: [], receipts: [], swaps: [], deposits: [], withdrawals: [], renewals: [], rejections: [], closed: [], incoming: [], outgoing: [], allocations: [] }
 
 export type WalletState = { phase: 'idle' } | { phase: 'connecting'; kind: WalletKind } | { phase: 'connected'; session: WalletSession } | { phase: 'error'; message: string }
 
@@ -190,8 +194,12 @@ export function DexProvider({ children }: { children: ReactNode }) {
   const latest = useCallback(() => mineRef.current, [])
   const party = session?.party
 
-  // ---- public: config and pools ----
+  // ---- public: the Orvane pool's config and state (pool networks only) ----
   useEffect(() => {
+    if (!NETWORK.pool) {
+      setStatus('ready')
+      return
+    }
     let alive = true
     let timer: ReturnType<typeof setTimeout>
     let lastSwaps = -1
@@ -228,10 +236,14 @@ export function DexProvider({ children }: { children: ReactNode }) {
     async (kind: WalletKind) => {
       setWallet({ phase: 'connecting', kind })
       try {
-        const network = config?.network === 'mainnet' ? 'mainnet' : 'devnet'
         // the wallet SDKs are large; load them only when someone connects
-        const { connectGateway, connectLoop } = await import('./wallet.ts')
-        const s = kind === 'gateway' ? await connectGateway() : await connectLoop(network)
+        const w = await import('./wallet.ts')
+        const s =
+          kind === 'gateway'
+            ? await w.connectGateway()
+            : kind === 'extension'
+              ? await w.connectExtension()
+              : await w.connectLoop(NETWORK.loop ?? 'testnet')
         setWallet({ phase: 'connected', session: s })
         try {
           localStorage.setItem(WALLET_KEY, kind)
@@ -243,7 +255,7 @@ export function DexProvider({ children }: { children: ReactNode }) {
         throw e
       }
     },
-    [config?.network],
+    [],
   )
 
   const disconnect = useCallback(async () => {
@@ -262,7 +274,7 @@ export function DexProvider({ children }: { children: ReactNode }) {
   // reconnect quietly to the wallet used last time
   const tried = useRef(false)
   useEffect(() => {
-    if (tried.current || !config) return
+    if (tried.current || status !== 'ready') return
     tried.current = true
     let kind: string | null = null
     try {
@@ -270,15 +282,18 @@ export function DexProvider({ children }: { children: ReactNode }) {
     } catch {
       /* no storage */
     }
-    if (kind === 'gateway' || kind === 'loop') connect(kind).catch(() => setWallet({ phase: 'idle' }))
-  }, [config, connect])
+    if (kind === 'gateway' || kind === 'loop' || kind === 'extension') connect(kind).catch(() => setWallet({ phase: 'idle' }))
+  }, [status, connect])
 
   // ---- the user's own contracts ----
   const read = useCallback(async (): Promise<Mine | undefined> => {
     if (!session) return undefined
     const { ledger, party } = session
+    // a query the user's node cannot answer (say, the pool package is not
+    // there) must not hide the rest
+    const safe = <T,>(p: Promise<T[]>) => p.catch(() => [] as T[])
     const [rows, holdings, instructions, allocations] = await Promise.all([
-      ledger.query<unknown>(party, [
+      NETWORK.pool ? safe(ledger.query<unknown>(party, [
         DEX.LpPosition,
         DEX.SwapReceipt,
         DEX.SwapRequest,
@@ -287,11 +302,19 @@ export function DexProvider({ children }: { children: ReactNode }) {
         DEX.RenewRequest,
         DEX.RequestRejected,
         DEX.PositionClosed,
-      ]),
+      ])) : Promise.resolve([] as Contract<unknown>[]),
       ledger.queryInterface<HoldingWire>(party, HOLDING_V2),
-      ledger.queryInterface<InstructionWire>(party, TRANSFER_INSTRUCTION_V2),
-      ledger.queryInterface<AllocationWire>(party, ALLOCATION_V2),
+      safe(ledger.queryInterface<InstructionWire>(party, TRANSFER_INSTRUCTION_V2)),
+      safe(ledger.queryInterface<AllocationWire>(party, ALLOCATION_V2)),
     ])
+    const transferOf = (i: { contractId: string; view: InstructionWire }) => ({
+      cid: i.contractId,
+      instrument: i.view.transfer.instrumentId,
+      amount: dec(i.view.transfer.amount),
+      sender: i.view.transfer.sender.owner,
+      receiver: i.view.transfer.receiver.owner,
+      executeBefore: i.view.transfer.executeBefore,
+    })
     const of = <T,>(entity: string) => rows.filter((c) => c.templateId.endsWith(`:${entity}`)) as Contract<T>[]
     const newest = <T,>(xs: Contract<T>[]) => [...xs].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
     return {
@@ -306,15 +329,8 @@ export function DexProvider({ children }: { children: ReactNode }) {
       renewals: of<RenewRequest>('RenewRequest').filter((r) => r.payload.provider === party),
       rejections: newest(of<RequestRejected>('RequestRejected').filter((r) => r.payload.party === party)),
       closed: newest(of<PositionClosed>('PositionClosed').filter((r) => r.payload.provider === party)),
-      incoming: instructions
-        .filter((i) => i.view.transfer.receiver.owner === party)
-        .map((i) => ({
-          cid: i.contractId,
-          instrument: i.view.transfer.instrumentId,
-          amount: dec(i.view.transfer.amount),
-          sender: i.view.transfer.sender.owner,
-          executeBefore: i.view.transfer.executeBefore,
-        })),
+      incoming: instructions.filter((i) => i.view.transfer.receiver.owner === party).map(transferOf),
+      outgoing: instructions.filter((i) => i.view.transfer.sender.owner === party && i.view.transfer.receiver.owner !== party).map(transferOf),
       allocations: allocations.map((a) => ({
         cid: a.contractId,
         admin: a.view.allocation.admin,

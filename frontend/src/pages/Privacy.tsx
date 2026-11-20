@@ -9,10 +9,16 @@ import { AnimatePresence, motion } from 'motion/react'
 import { toNumber } from '../../../shared/decimal.ts'
 import { useDex } from '../ledger/dex.tsx'
 import { ConnectFirst, EyeIcon, fmt, fmtCompact, shortParty } from '../ui/bits.tsx'
+import { NETWORK } from '../ledger/network.ts'
+import { useMarket } from '../swap/market.tsx'
 
 type Row = { key: string; kind: string; title: string; detail: string }
 
 export default function Privacy() {
+  return NETWORK.cantex ? <SwapPrivacy /> : <PoolPrivacy />
+}
+
+function PoolPrivacy() {
   const { config, pools, party, mine, instrument } = useDex()
   const allocations = mine.allocations
   const pool = config?.pools[0]
@@ -162,6 +168,112 @@ export default function Privacy() {
           </dl>
         </motion.section>
       )}
+    </div>
+  )
+}
+
+// Swaps through Cantex: who sees what, said plainly, next to what your own
+// node holds right now.
+const WHO_SEES: Array<{ who: string; sees: string; not: string }> = [
+  {
+    who: 'Orvane',
+    sees: 'Nothing. No account, no server that sees your swaps; your swap list lives in this browser.',
+    not: 'Your party, your balances, your trades',
+  },
+  {
+    who: 'Cantex',
+    sees: 'The transfer you send to its swap party (your party, the token and amount) and the swap it fills.',
+    not: 'Anything else in your wallet',
+  },
+  {
+    who: "The token's registry",
+    sees: 'Transfers of its own token, as with any Canton token.',
+    not: 'Other tokens, other trades',
+  },
+  {
+    who: 'Everyone else',
+    sees: "Cantex's pool reserves, prices and aggregate volumes. Canton never broadcasts your transaction.",
+    not: 'That you traded, how much, or your party',
+  },
+]
+
+function SwapPrivacy() {
+  const { party, mine } = useDex()
+  const market = useMarket()
+  const label = (i: { admin: string; id: string }) => market.token(i)?.symbol ?? i.id
+  const rows = [
+    ...mine.outgoing.map((o) => ({ key: o.cid, kind: 'Pending', title: `${fmt(toNumber(o.amount), 4)} ${label(o.instrument)}`, detail: 'sent, not taken yet' })),
+    ...mine.incoming.map((o) => ({ key: o.cid, kind: 'Incoming', title: `${fmt(toNumber(o.amount), 4)} ${label(o.instrument)}`, detail: 'waiting for you to accept' })),
+    ...mine.holdings.map((h) => ({ key: h.cid, kind: 'Holding', title: `${fmt(toNumber(h.amount), 4)} ${label(h.instrument)}`, detail: h.locked ? 'locked' : 'in your account' })),
+  ]
+  return (
+    <div className="page page-lens">
+      <header className="lens-head">
+        <p className="eyebrow">Privacy · {NETWORK.label}</p>
+        <h1 className="display small">
+          Nothing to hide, <em>nothing kept.</em>
+        </h1>
+        <p className="lede">
+          Canton only sends a party the parts of a transaction it is part of. When you swap through Orvane, your wallet sends the transfer to Cantex
+          directly; Orvane is not in the transaction at all. Here is who sees what, and what your own node holds right now.
+        </p>
+      </header>
+
+      <div className="lens-grid two">
+        <motion.section className="lens-col active" initial={{ opacity: 0, y: 30, rotateY: 8 }} animate={{ opacity: 1, y: 0, rotateY: 0 }} transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}>
+          <header>
+            <span className="avatar">Y</span>
+            <div>
+              <h3>Your node</h3>
+              <span className="muted small">{party ? shortParty(party) : 'not connected'}</span>
+            </div>
+            <span className="count mono">{rows.length}</span>
+          </header>
+          {!party ? (
+            <div className="lens-empty">
+              <ConnectFirst what="see what your node holds" />
+            </div>
+          ) : (
+            <ul>
+              <AnimatePresence initial={false}>
+                {rows.slice(0, 16).map((r) => (
+                  <motion.li key={r.key} layout className={`lens-row k-${r.kind}`} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}>
+                    <span className="k">{r.kind}</span>
+                    <span className="t mono">{r.title}</span>
+                    <span className="d">{r.detail}</span>
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+              {rows.length === 0 && <li className="more muted small">Nothing yet.</li>}
+            </ul>
+          )}
+          <footer className="veil">
+            <EyeIcon /> Read through your wallet. Orvane stores none of it.
+          </footer>
+        </motion.section>
+
+        <motion.section className="lens-col" initial={{ opacity: 0, y: 30, rotateY: -8 }} animate={{ opacity: 1, y: 0, rotateY: 0 }} transition={{ duration: 0.8, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}>
+          <header>
+            <span className="avatar org">§</span>
+            <div>
+              <h3>Who sees a swap</h3>
+              <span className="muted small">and who does not</span>
+            </div>
+          </header>
+          <ul>
+            {WHO_SEES.map((w) => (
+              <li key={w.who} className="lens-row k-Pool">
+                <span className="k">{w.who}</span>
+                <span className="t">{w.sees}</span>
+                <span className="d">not: {w.not}</span>
+              </li>
+            ))}
+          </ul>
+          <footer className="veil">
+            <EyeIcon closed /> {market.pools.length} Cantex pools · prices public, trades not.
+          </footer>
+        </motion.section>
+      </div>
     </div>
   )
 }

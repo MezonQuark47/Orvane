@@ -2,14 +2,17 @@
 // Every number here is read from your own node through your wallet.
 
 import { AnimatePresence, motion } from 'motion/react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ZERO, toNumber } from '../../../shared/decimal.ts'
 import { sameInstrument } from '../../../shared/dex.ts'
 import { useDex, type Allocation, type Incoming } from '../ledger/dex.tsx'
 import { answerIncoming, takeBack } from '../ledger/orders.ts'
 import { VaultStage } from '../three/stage.tsx'
 import { useActivity } from '../ui/activity.tsx'
-import { ConnectFirst, Panel, Rolling, SkeletonList, TokenGlyph, fmt, glyphFor, shortParty } from '../ui/bits.tsx'
+import { ConnectFirst, Panel, Rolling, SkeletonList, TokenIcon, fmt, shortParty } from '../ui/bits.tsx'
+import { NETWORK } from '../ledger/network.ts'
+import { useMarket } from '../swap/market.tsx'
+import { errorText } from '../ui/errors.ts'
 import { dateTime } from '../ui/time.ts'
 
 export default function Portfolio() {
@@ -18,7 +21,16 @@ export default function Portfolio() {
   const pool = config?.pools[0]
   const live = pool ? pools.get(pool.poolId) : undefined
 
-  const instruments = Object.entries(config?.instruments ?? {}).map(([key, i]) => ({ key, ...i }))
+  const market = useMarket()
+  // every token this network trades, plus anything else the wallet holds
+  const listed = NETWORK.cantex
+    ? market.tokens.map((t) => ({ key: t.symbol, label: t.symbol, admin: t.admin, id: t.id }))
+    : Object.entries(config?.instruments ?? {}).map(([key, i]) => ({ key, ...i }))
+  const extra = mine.holdings
+    .map((h) => h.instrument)
+    .filter((i, n, all) => !listed.some((l) => sameInstrument(l, i)) && all.findIndex((x) => sameInstrument(x, i)) === n)
+    .map((i) => ({ key: i.id, label: i.id, ...i }))
+  const instruments = [...listed, ...extra]
   const totals = instruments.map((i) => {
     const hs = mine.holdings.filter((h) => sameInstrument(h.instrument, i))
     return {
@@ -27,14 +39,26 @@ export default function Portfolio() {
       locked: toNumber(hs.filter((h) => h.locked).reduce((s, h) => s + h.amount, ZERO)),
     }
   })
-  // value everything in the pool's second asset, at the pool price
+  // value everything in Canton Coin at Cantex pool prices (or, on LocalNet,
+  // in the Orvane pool's second asset)
+  const priceInCc = (i: { admin: string; id: string }) => {
+    const cc = market.cc
+    if (!cc) return 0
+    if (sameInstrument(i, cc)) return 1
+    const p = market.poolFor(i, cc)
+    if (!p) return 0
+    const [ccSide, other] = sameInstrument(p.a, cc) ? [Number(p.reserveA), Number(p.reserveB)] : [Number(p.reserveB), Number(p.reserveA)]
+    return other > 0 ? ccSide / other : 0
+  }
   const priceOf = (i: { admin: string; id: string }) => {
+    if (NETWORK.cantex) return priceInCc(i)
     if (!pool || !live || live.reserveA === ZERO) return 0
     if (sameInstrument(i, pool.instrumentB)) return 1
     if (sameInstrument(i, pool.instrumentA)) return toNumber(live.reserveB) / toNumber(live.reserveA)
     return 0
   }
-  const unit = pool ? instrument(pool.instrumentB).label : ''
+  const unit = NETWORK.cantex ? 'CC' : pool ? instrument(pool.instrumentB).label : ''
+  const ccUsd = NETWORK.cantex ? market.prices[NETWORK.cantex.referenceMarket]?.price : undefined
   const worth = totals.reduce((s, t) => s + (t.free + t.locked) * priceOf(t), 0)
 
   if (!party) {
@@ -74,15 +98,16 @@ export default function Portfolio() {
           </motion.span>
         </h1>
         <div className="networth">
-          <span className="muted small">Total value, at the pool price</span>
+          <span className="muted small">{NETWORK.cantex ? 'Total value, at Cantex pool prices' : 'Total value, at the pool price'}</span>
           <div>
             <Rolling value={worth} digits={4} className="big mono" /> <span className="unit">{unit}</span>
           </div>
+          {ccUsd !== undefined && worth > 0 && <span className="muted small mono">≈ {fmt(worth * ccUsd, 2)} USD at Canton Coin's market price</span>}
         </div>
         <div className="balances">
           {totals.map((t, n) => (
             <motion.div key={t.key} className="balance-card" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 + n * 0.08 }}>
-              <TokenGlyph symbol={glyphFor(t.key)} size={34} />
+              <TokenIcon symbol={t.label} size={34} />
               <div>
                 <Rolling value={t.free} digits={4} className="mono strong" />
                 <span className="muted small">
@@ -95,16 +120,20 @@ export default function Portfolio() {
       </div>
 
       <div className="rail">
+        <PendingSwapsPanel />
         <IncomingPanel items={mine.incoming} />
-        <EndedPanel items={mine.allocations} />
+        {NETWORK.pool && <EndedPanel items={mine.allocations} />}
+        <BridgePanel />
 
-        <Panel delay={0.25}>
-          <header className="card-head">
-            <h3>History</h3>
-            <span className="muted small">records only you and the operator hold</span>
-          </header>
-          <History />
-        </Panel>
+        {NETWORK.pool && (
+          <Panel delay={0.25}>
+            <header className="card-head">
+              <h3>History</h3>
+              <span className="muted small">records only you and the operator hold</span>
+            </header>
+            <History />
+          </Panel>
+        )}
 
         <Panel delay={0.35}>
           <header className="card-head">
@@ -113,12 +142,12 @@ export default function Portfolio() {
           </header>
           <ul className="holding-list">
             {mine.holdings.map((h) => {
-              const i = instrument(h.instrument)
+              const label = market.token(h.instrument)?.symbol ?? instrument(h.instrument).label
               return (
                 <li key={h.cid}>
-                  <TokenGlyph symbol={glyphFor(i.key)} size={20} />
+                  <TokenIcon symbol={label} size={20} />
                   <span className="mono strong">{fmt(toNumber(h.amount), 4)}</span>
-                  <span className="muted">{i.label}</span>
+                  <span className="muted">{label}</span>
                   <span className="obs small">{h.locked ? 'locked in an allocation' : 'free'}</span>
                 </li>
               )
@@ -138,6 +167,7 @@ export default function Portfolio() {
 
 function IncomingPanel({ items }: { items: Incoming[] }) {
   const dex = useDex()
+  const market = useMarket()
   const activity = useActivity()
   const [busy, setBusy] = useState<string>()
   if (!items.length) return null
@@ -163,26 +193,30 @@ function IncomingPanel({ items }: { items: Incoming[] }) {
       <ul className="holding-list">
         <AnimatePresence initial={false}>
           {items.map((i) => {
-            const label = dex.instrument(i.instrument).label
+            const label = market.token(i.instrument)?.symbol ?? dex.instrument(i.instrument).label
             return (
               <motion.li key={i.cid} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: 20 }}>
-                <TokenGlyph symbol={glyphFor(label)} size={20} />
+                <TokenIcon symbol={label} size={20} />
                 <span className="mono strong">{fmt(toNumber(i.amount), 4)}</span>
                 <span className="muted">{label}</span>
                 <span className="obs small">from {i.sender ? shortParty(i.sender) : 'the registry'}</span>
-                <span className="row-actions">
-                  <button className="ghost small" disabled={!!busy} onClick={() => answer(i, true)}>
-                    {busy === i.cid ? '…' : 'Accept'}
-                  </button>
-                  <button className="link small" disabled={!!busy} onClick={() => answer(i, false)}>
-                    Decline
-                  </button>
-                </span>
+                {/* accepting needs the token's registry, which Orvane only reaches where it runs one (LocalNet) */}
+                {NETWORK.pool && (
+                  <span className="row-actions">
+                    <button className="ghost small" disabled={!!busy} onClick={() => answer(i, true)}>
+                      {busy === i.cid ? '…' : 'Accept'}
+                    </button>
+                    <button className="link small" disabled={!!busy} onClick={() => answer(i, false)}>
+                      Decline
+                    </button>
+                  </span>
+                )}
               </motion.li>
             )
           })}
         </AnimatePresence>
       </ul>
+      {!NETWORK.pool && <p className="muted small">Accept or decline these in your wallet.</p>}
     </Panel>
   )
 }
@@ -279,5 +313,93 @@ function History() {
         </li>
       ))}
     </ul>
+  )
+}
+
+// Swaps sent to Cantex that it has not filled yet. Cantex leaves a swap it
+// cannot fill pending; the wallet that sent it can withdraw it.
+function PendingSwapsPanel() {
+  const { mine } = useDex()
+  const market = useMarket()
+  const swapParty = NETWORK.cantex?.swapParty
+  const pending = mine.outgoing.filter((o) => o.receiver === swapParty)
+  if (!pending.length) return null
+  return (
+    <Panel delay={0.12} className="incoming">
+      <header className="card-head">
+        <h3>Not filled yet</h3>
+        <span className="badge">{pending.length}</span>
+      </header>
+      <ul className="holding-list">
+        {pending.map((o) => {
+          const label = market.token(o.instrument)?.symbol ?? o.instrument.id
+          return (
+            <li key={o.cid}>
+              <TokenIcon symbol={label} size={20} />
+              <span className="mono strong">{fmt(toNumber(o.amount), 4)}</span>
+              <span className="muted">{label}</span>
+              <span className="obs small">until {dateTime(o.executeBefore)}</span>
+            </li>
+          )
+        })}
+      </ul>
+      <p className="muted small">Cantex hasn't filled these swaps. Withdraw the pending transfer in your wallet to get the funds back, or wait for it to expire.</p>
+    </Panel>
+  )
+}
+
+// Loop's USDC bridge: send USDCx out to an Ethereum address as USDC. Shown
+// only to wallets whose bridge access Loop has granted.
+function BridgePanel() {
+  const { wallet, free } = useDex()
+  const market = useMarket()
+  const activity = useActivity()
+  const session = wallet.phase === 'connected' ? wallet.session : undefined
+  const [granted, setGranted] = useState(false)
+  const [to, setTo] = useState('')
+  const [amount, setAmount] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const usdcx = market.tokens.find((t) => t.symbol === 'USDCx')
+
+  useEffect(() => {
+    setGranted(false)
+    session?.account?.().then((a) => setGranted(a.usdcBridge === 'granted'), () => setGranted(false))
+  }, [session])
+
+  if (!session?.bridgeUsdcx || !granted || !usdcx) return null
+  const balance = toNumber(free(usdcx))
+  const valid = /^0x[0-9a-fA-F]{40}$/.test(to) && Number(amount) > 0 && Number(amount) <= balance
+  const send = async () => {
+    if (!valid) return
+    setBusy(true)
+    setError(undefined)
+    try {
+      await activity.track(`Send ${amount} USDCx to Ethereum`, () => session.bridgeUsdcx!(to, amount), {
+        detail: 'Sign in Loop…',
+        done: () => ({ detail: `Bridging to ${to.slice(0, 8)}…; it arrives as USDC on Ethereum.` }),
+      })
+      setAmount('')
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Panel delay={0.3}>
+      <header className="card-head">
+        <h3>Send USDCx to Ethereum</h3>
+        <span className="muted small">through Loop's USDC bridge</span>
+      </header>
+      <div className="bridge-form">
+        <input className="mono" placeholder="0x… Ethereum address" value={to} onChange={(e) => setTo(e.target.value.trim())} aria-label="Ethereum address" />
+        <input className="mono" inputMode="decimal" placeholder={`amount (you have ${fmt(balance, 2)})`} value={amount} onChange={(e) => /^\d*\.?\d{0,6}$/.test(e.target.value) && setAmount(e.target.value)} aria-label="USDCx amount" />
+        <button className="ghost small" disabled={!valid || busy} onClick={send}>
+          {busy ? 'Sending…' : 'Send'}
+        </button>
+      </div>
+      {error && <p className="tx-error">{error}</p>}
+    </Panel>
   )
 }

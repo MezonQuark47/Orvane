@@ -1,177 +1,121 @@
 # Orvane
 
-A private exchange on the Canton Network, where liquidity never leaves your wallet.
+Swap any Canton token from your own wallet, priced and checked before you sign.
 
-Orvane is a constant-product DEX built on the Canton Network Token Standard V2 (CIP-0112) and
-written in Daml. It does two things, and tries to do them better than anyone else on Canton:
+Orvane is a swap app for the Canton Network. The liquidity is [Cantex](https://cantex.io)'s, the
+deepest pools on Canton, reached through Cantex's public Connect API. Everything a user touches is
+Orvane's own work: market data, an independent quote check, the guard that re-prices right before
+signing, the wallet integration, fill tracking and the portfolio. **No account, no Orvane fee, and
+Orvane is never in the transaction.**
 
-- **Private swaps.** You sell an exact amount for at least the minimum you set, in one atomic
-  transaction. Only you and the operator can see the trade. The providers on the other side never
-  learn who you are, and you never learn who they are.
-- **Self-custodial liquidity.** Providers never hand their funds to a pool. Their deposit stays in
-  their own account, locked for a term they choose, and every swap settles a slice of it. They can
-  withdraw whenever they like. When the term ends, the funds unlock without anyone's help, even if
-  Orvane is gone.
+Status: running against Cantex on **Canton TestNet** (and MainNet's API) with live data. Quoting,
+Orvane's own pricing check and the guard are verified against Cantex's live API. Swaps are signed
+through Five North's Loop wallet; the first live Loop swap on TestNet is the next step. Not audited;
+read [SECURITY.md](SECURITY.md).
 
-Status: working end to end on Canton LocalNet (Splice 0.10.2), with real Canton Coin and Splice's
-official V2 test token, through the official Wallet Gateway. Not audited. Read
-[SECURITY.md](SECURITY.md) for the trust model.
+## What Orvane adds on top of Cantex's pools
 
-## Why this design
+| | |
+|---|---|
+| **Own pricing check** | Every quote is recomputed from the pools' public reserves with Cantex's fee rules and compared with Cantex's own quote. Verified against every quotable pair on TestNet and MainNet (`scripts/smoke-cantex.ts`). |
+| **Price guard** | Cantex fills at the pool price when the transfer arrives and its quote is not binding. Orvane quotes again right before asking for a signature and sends nothing if the price moved past the user's limit. |
+| **Market sanity** | The pool's price is shown next to Canton Coin's market price; a pool far off the market is flagged before you trade into it. |
+| **Readiness checks** | Balance, Cantex's minimum size, and whether the wallet can receive the output token in one step (a transfer pre-approval), before the wallet is asked to sign. |
+| **Fill tracking** | Watches the user's own balance until the output lands; a swap Cantex has not filled shows up as pending, with what to do about it. |
+| **Wallets** | Loop (TestNet, MainNet) swaps any listed token today. CIP-0103 browser wallets and the Wallet Gateway connect and show the portfolio; for swaps they need a registry endpoint per token (roadmap). Orvane never holds keys and reads only the user's own contracts, through their wallet. |
+| **Portfolio** | Every holding valued at live pool prices, pending and incoming transfers, and Loop's USDCx-to-Ethereum bridge. |
+| **Live market** | Prices and candles over Cantex's public websocket; quotes refresh every 5 seconds with a freshness indicator. |
 
-| | Typical Canton AMM | Orvane |
-|---|---|---|
-| Where LP funds sit | In the operator's or the pool's custody | In the LP's own account, locked by the token standard |
-| If the operator disappears | LPs depend on it to get funds back | Funds unlock on their own at the end of the term |
-| Who sees a trade | Trader, operator, and often the counterparties | Trader and operator only: every leg runs through the operator |
-| How LPs are paid | An LP token to redeem later | Their own allocation grows with the fees, on every swap |
-| Asset support | Often one integration per token | Any CIP-0112 asset; Canton Coin and the test token run the same code |
-
-## How it works
-
-### Liquidity
-
-A provider signs one transaction at the pool's `OrderDesk`. It creates two **committed, iterated
-V2 allocations** in the provider's own account, one per asset, with the operator as executor and the
-term end as deadline. The operator opens a position on them (`PoolRules_AddLiquidity`) after checking
-the amounts, the term and that the deposit matches the pool price.
+## How a swap works
 
 ```
-Provider --one signature--> OrderDesk_Deposit
-                             ├─ AllocationFactory_Allocate   asset A, committed, locked until term end
-                             ├─ AllocationFactory_Allocate   asset B, committed, locked until term end
-                             └─ DepositRequest               (provider + operator)
-Operator --opens-->          PoolRules_AddLiquidity          LpPosition (provider + operator), reserves += A, B
+Orvane   quote ──► Cantex /connect/quote          route, fees, expected output
+         check ──► recompute from /pools/state     must match Cantex's quote
+User     sets amount and price limit
+Orvane   quote again + check again                 refuses if the price moved past the limit
+Wallet   one transfer: sell token ──► cantex-swap::…   memo = the token to receive
+Cantex   fills it from its pools, sends the output back to the wallet
+Orvane   watches the wallet's balance until it lands
 ```
 
-Committed means the provider can't pull the funds out from under a swap mid-term. They can still
-leave at any time through the operator (`WithdrawRequest`), and at the deadline the token standard
-lets them withdraw on their own. Canton Coin also expires the allocation at its deadline, so it
-unlocks with no action at all. Renewing a position re-locks the same amounts for a new term in one
-transaction.
+Fees are Cantex's: the pools' fee, Cantex's 0.20% Connect fee and a small network fee in Canton Coin
+(0.1 CC on TestNet). Cantex's minimum is 50 CC or the equivalent. Orvane adds nothing.
 
-### Swaps
+## Who sees what
 
-A trader signs one transaction at the `OrderDesk`: it locks exactly the input in an allocation whose
-only leg is trader → operator, and files a `SwapRequest`. The operator fills it in one transaction:
-
-```
-Operator --PoolRules_Swap--> checks every position (in term, allocations match the books)
-                             prices with x*y=k and a 0.30% fee, refuses anything below the trader's minimum
-                             SwapRequest_Fill            the trader's receipt allocation, for exactly the output
-asset A batch:  SettleBatch  trader → operator → each LP, pro rata to what they hold of A
-asset B batch:  SettleBatch  each LP → operator → trader, pro rata to what they hold of B
-                             every LP allocation rolls into its next iteration with its new amount
-                             SwapReceipt (trader + operator), PoolState updated
-```
-
-The operator stands in the middle of every leg with an allocation that nets to zero, so no trader
-ever appears in an LP's allocation and no LP in a trader's. If the price moved past the trader's
-minimum, the swap is handed back and the input unlocked in the same transaction.
-
-Wallets of external parties can only sign transactions with a single root action, which is why
-orders are one choice on the operator's `OrderDesk` contract, handed to the wallet as a disclosed
-contract. The desk's choices still need the user's own signature.
-
-### Who sees what
-
-| | You | Other traders | Other LPs | Operator | Public |
+| | You | Orvane | Cantex | Token registry | Everyone else |
 |---|---|---|---|---|---|
-| That you traded, and how much | yes | no | no | yes | no |
-| Your liquidity position | yes | no | no | yes | no |
-| Who was on the other side | no | no | no | yes | no |
-| Pool reserves and recent prices | yes | yes | yes | yes | yes |
+| That you swapped, and how much | yes | no | yes | its own token | no |
+| The rest of your wallet | yes | no | no | no | no |
+| Your swap history | yes (this browser) | no | yes | no | no |
+| Pool reserves and prices | yes | yes | yes | yes | yes |
 
-As with any token, an asset's registry also sees transfers of its own asset. The **Privacy** tab
-shows it live: what your node holds next to what everyone else can learn, and a check from your own
-allocations that the only counterparty they name is the operator.
+## Running it
+
+```powershell
+cd frontend
+npm install
+npm run dev            # Canton TestNet, http://localhost:5173
+npm run dev:mainnet    # Canton MainNet
+```
+
+There is no Orvane server: the app talks to Cantex's public API and to the user's wallet. To swap
+on TestNet you need a [Loop](https://docs.fivenorth.io/loop-sdk/overview/) TestNet wallet with some
+test Canton Coin, and receiving turned on (a transfer pre-approval) for the token you buy.
+
+## Tests
+
+```powershell
+node --test shared/quote.test.ts     # pricing check against captured Cantex quotes
+node scripts/smoke-cantex.ts         # every TestNet pair, live
+node scripts/smoke-cantex.ts mainnet # every MainNet pair, live
+./scripts/test.ps1                   # the above unit tests plus the Daml suite of the Orvane pool
+```
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| `daml/orvane/` | The contracts: `Orvane.Dex.Pool` (rules, swap, liquidity), `Orders` (desk and requests), `State`, `Token` (V2 helpers), `Math` |
-| `daml/orvane-test/` | Daml Script tests against Splice's official V2 test token |
-| `daml/dars/` | Official token-standard V2 API packages and the V2 test token, from the Splice 0.10.2 bundle |
-| `config/pairs.localnet.json` | Network and pools: pairs, fee, terms, limits |
-| `operator/` | The executor: sets up pools, settles requests, serves the public API and the registry proxy |
-| `shared/` | Ledger client, exact Daml-decimal math, DEX commands, V2 registry clients (Scan and the test token) |
-| `frontend/` | React app: CIP-0103 wallets (Wallet Gateway, Loop), Swap, Liquidity, Portfolio, Privacy |
-| `scripts/` | LocalNet, Wallet Gateway, test funds, the end-to-end check |
+| `shared/cantex.ts` | Cantex's public API: tokens, pools, quotes, websocket market data |
+| `shared/quote.ts` | Orvane's own pricing check, the price guard, market deviation |
+| `shared/networks.ts` | TestNet / MainNet / LocalNet settings, Cantex endpoints and swap parties |
+| `frontend/src/swap/` | Market data provider, swap execution and fill tracking, local swap history |
+| `frontend/src/ledger/` | Wallets (Loop, CIP-0103 browser wallets, Wallet Gateway) and reading the user's node |
+| `frontend/src/pages/` | Swap, Portfolio, Privacy, the landing page |
+| `daml/`, `operator/`, `config/` | The Orvane pool, kept for later (below) |
 
-## Running it on LocalNet
+## The Orvane pool (kept for later)
 
-You need Docker Desktop (about 11 GB of memory), Node 22.18+, and [dpm](https://docs.digitalasset.com)
-with Daml SDK 3.7.3. Download the Splice node bundle
-([releases](https://github.com/digital-asset/decentralized-canton-sync/releases), 0.10.2) and set
-`ORVANE_SPLICE_DIR` to its `splice-node` folder.
+Before routing through Cantex, Orvane built its own pool on Token Standard V2 with self-custodial
+liquidity: providers' funds stay in their own accounts in committed allocations, every swap settles
+pro rata against all of them through the operator, and funds return on their own at the end of a
+term. It works end to end on LocalNet (real Canton Coin, Wallet Gateway wallets, a live term-end test
+with the operator off) and is kept in the repository, switched off outside LocalNet:
 
 ```powershell
-# 1. LocalNet and the Wallet Gateway (http://localhost:3030)
-./scripts/localnet.ps1 up
-./scripts/wallet-gateway.ps1 up
-
-# 2. Contracts
+./scripts/localnet.ps1 up; ./scripts/wallet-gateway.ps1 up
 cd daml; dpm build --all; cd ..
-
-# 3. Operator: uploads the packages, opens the pools from config/, settles (http://localhost:7600)
 node operator/index.ts
-
-# 4. Web app (http://localhost:5173)
-cd frontend; npm install; npm run dev
+cd frontend; npm run dev:localnet
 ```
 
-Then, once per wallet:
-
-```powershell
-# a ledger user for the wallet to sign in as (Client ID; Client Secret on LocalNet is "unsafe")
-./scripts/wallet-gateway.ps1 user my-wallet
-```
-
-Connect in the app with **Connect wallet → Wallet Gateway** and sign in with that Client ID. Test funds
-arrive as token-standard transfer offers, which you accept under **Portfolio → Incoming**:
-
-```powershell
-./scripts/fund-localnet.ps1 -Party <your party id> -Usd 100 -Cc 20000
-```
-
-`./scripts/localnet.ps1 stop` pauses LocalNet and keeps its data; `up` resumes it.
-
-## Tests
-
-```powershell
-./scripts/test.ps1              # Daml: builds everything and runs the Daml Script suite
-node scripts/e2e-localnet.ts    # LocalNet, with the operator running
-```
-
-The Daml suite runs against real V2 allocations of Splice's test token: deposits and their limits,
-swaps both ways, trader protection (minimum, stale quotes, exact legs enforced by the registry,
-nobody ordering for someone else), withdrawals, renewals, term ends with and without the operator,
-pausing, privacy, and the books balancing over seeded runs of swaps (`x*y` never shrinks, supply is
-conserved, every position's share holds).
-
-The end-to-end check puts providers and a trader on a different participant from the operator,
-as real wallets are. It funds them through transfer offers, deposits, swaps both ways, withdraws,
-renews, and checks rejections, the books and privacy after each step, with real Canton Coin.
-
+Its contracts, tests and trust model are described in [SECURITY.md](SECURITY.md#the-orvane-pool-localnet-kept-for-later).
 On a Turkish (or other dotted-i) system locale the Daml tools need an English JVM locale; the test
-script sets `JAVA_TOOL_OPTIONS=-Duser.language=en -Duser.country=US`.
+script sets it.
 
 ## Roadmap
 
-1. Contracts on Token Standard V2 with self-custodial liquidity (done)
-2. Operator with exact settlement, rejections that release funds, and term handling (done)
-3. Web app with CIP-0103 wallets; tested with the Wallet Gateway on LocalNet (done)
-4. DevNet: real V2 pairs, and the [Loop](https://docs.fivenorth.io/loop-sdk/overview/) wallet once
-   Five North has reviewed the package
-5. Remove the remaining operator trust: a second executor that co-signs every settlement, or
-   settlement only through the pool contract (see [SECURITY.md](SECURITY.md))
+1. Swap app on Cantex liquidity with Orvane's own pricing check and guard (done, TestNet)
+2. Loop end-to-end swaps on TestNet, then MainNet
+3. Other CIP-0103 wallets on TestNet/MainNet: needs a registry endpoint for each token (Scan is
+   allowlisted), which a validator node's Scan proxy provides
+4. A minimum-output guarantee as soon as Cantex Connect supports one (requested)
 
 ## Acknowledgements
 
-The token-standard API packages and the V2 test token in `daml/dars/` are from
-[Splice](https://github.com/hyperledger-labs/splice) (Apache-2.0), as published in its 0.10.2
-release bundle.
+Liquidity: [Cantex](https://docs.cantex.io) by CaviarNine, through its public Connect API. Orvane is
+an independent app and not affiliated with Cantex. The token-standard API packages and the V2 test
+token in `daml/dars/` are from [Splice](https://github.com/hyperledger-labs/splice) (Apache-2.0).
 
 ## License
 
