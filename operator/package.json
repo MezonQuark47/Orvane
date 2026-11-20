@@ -1,14 +1,14 @@
 {
   "name": "orvane-operator",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Settlement operator for Orvane (dpm sandbox or Splice LocalNet)",
+  "description": "Executor of the Orvane DEX: settles swaps and liquidity on token standard V2",
   "engines": {
     "node": ">=22.18"
   },
   "scripts": {
     "start": "node index.ts",
-    "start:localnet": "node index.ts --localnet"
+    "fund": "node fund.ts"
   }
 }

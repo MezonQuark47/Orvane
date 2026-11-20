@@ -10,7 +10,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Push-Location (Join-Path $root 'daml')
 try {
     dpm build --all
-    Push-Location 'orvane-amm-test'
+    Push-Location 'orvane-dex-test'
     try { dpm test } finally { Pop-Location }
 } finally {
     Pop-Location

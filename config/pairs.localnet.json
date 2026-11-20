@@ -1,0 +1,31 @@
+{
+  "network": "localnet",
+  "ledger": {
+    "url": "http://localhost:3975",
+    "adminUser": "ledger-api-user",
+    "appUser": "orvane",
+    "audience": "https://canton.network.global"
+  },
+  "userParticipants": ["http://localhost:2975"],
+  "scan": "http://scan.localhost:4000",
+  "operatorHint": "orvane-operator",
+  "testTokens": [
+    { "id": "TestUSD", "adminHint": "orvane-test-usd", "label": "TestUSD (test token)" }
+  ],
+  "instruments": {
+    "CC": { "registry": "scan", "id": "Amulet", "label": "Canton Coin" },
+    "TestUSD": { "registry": "testToken", "id": "TestUSD", "label": "TestUSD (test token)" }
+  },
+  "pools": [
+    {
+      "poolId": "CC-TestUSD",
+      "a": "CC",
+      "b": "TestUSD",
+      "feeBps": 30,
+      "maxPositions": 20,
+      "minTermSeconds": 600,
+      "maxTermSeconds": 7776000,
+      "ratioToleranceBps": 100
+    }
+  ]
+}

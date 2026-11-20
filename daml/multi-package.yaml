@@ -1,12 +1,3 @@
 packages:
-  - ./orvane-amm
-  - ./orvane-payments
-  - ./orvane-lending
-  - ./orvane-registry
-  - ./orvane-exchange
-  - ./orvane-treasury
-  - ./orvane-credit
-  - ./orvane-liquidity
-  - ./orvane-amm-test
   - ./orvane-dex
   - ./orvane-dex-test

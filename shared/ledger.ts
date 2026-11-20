@@ -52,7 +52,7 @@ const templateFilter = (templateId: string) => ({
 })
 
 let commandCounter = 0
-const newCommandId = () =>
+export const newCommandId = () =>
   `orvane-${Date.now().toString(36)}-${(commandCounter++).toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 
 export class LedgerError extends Error {
@@ -242,9 +242,12 @@ export class JsonLedger {
     commands: DamlCommand[],
     readAs: string[] = [],
     disclosedContracts: Array<{ templateId: string; contractId: string; createdEventBlob: string; synchronizerId: string }> = [],
+    // Pass a stable id to make retries idempotent: the participant rejects a
+    // second submission with the same id instead of running it twice.
+    commandId: string = newCommandId(),
   ): Promise<Transaction> {
     const r = await this.call<{ transaction: Transaction }>('/v2/commands/submit-and-wait-for-transaction', {
-      commands: { commands, commandId: newCommandId(), userId: this.userId, actAs, readAs, disclosedContracts },
+      commands: { commands, commandId, userId: this.userId, actAs, readAs, disclosedContracts },
       transactionFormat: {
         eventFormat: { filtersByParty: Object.fromEntries(actAs.map((p) => [p, { cumulative: [] }])), verbose: true },
         transactionShape: 'TRANSACTION_SHAPE_LEDGER_EFFECTS',
@@ -276,6 +279,45 @@ export class JsonLedger {
       .filter((e): e is NonNullable<typeof e> => !!e && !!e.interfaceViews?.[0]?.viewValue)
       .map((e) => ({ contractId: e.contractId, templateId: e.templateId, view: e.interfaceViews![0].viewValue as V }))
   }
+
+  // Active contracts of the given templates together with what it takes to
+  // disclose them to another participant: the created-event blob and the
+  // synchronizer they live on.
+  async queryDisclosable<T>(party: string, templateIds: string[]): Promise<Array<Contract<T> & { disclosed: DisclosableContract }>> {
+    const activeAtOffset = await this.ledgerEnd()
+    const rows = await this.call<
+      Array<{ contractEntry: { JsActiveContract?: { createdEvent: CreatedEvent & { createdEventBlob: string }; synchronizerId: string } } }>
+    >('/v2/state/active-contracts', {
+      eventFormat: {
+        filtersByParty: {
+          [party]: {
+            cumulative: templateIds.map((templateId) => ({
+              identifierFilter: { TemplateFilter: { value: { templateId, includeCreatedEventBlob: true } } },
+            })),
+          },
+        },
+        verbose: true,
+      },
+      activeAtOffset,
+    })
+    return rows
+      .map((r) => r.contractEntry.JsActiveContract)
+      .filter((a): a is NonNullable<typeof a> => !!a)
+      .map(({ createdEvent: e, synchronizerId }) => ({
+        contractId: e.contractId,
+        templateId: e.templateId,
+        payload: e.createArgument as T,
+        createdAt: e.createdAt,
+        disclosed: { templateId: e.templateId, contractId: e.contractId, createdEventBlob: e.createdEventBlob, synchronizerId },
+      }))
+  }
+}
+
+export interface DisclosableContract {
+  templateId: string
+  contractId: string
+  createdEventBlob: string
+  synchronizerId: string
 }
 
 // Find the first created contract of a template in a transaction.
