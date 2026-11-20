@@ -1,0 +1,81 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Pricing and pro-rata arithmetic for the pool. Pure functions only, so
+-- the operator and the frontend can mirror them and the tests can hit them
+-- directly.
+module Orvane.Dex.Math
+  ( bps
+  , tick
+  , divDown
+  , quoteOut
+  , productHolds
+  , splitProRata
+  , withinRatio
+  ) where
+
+-- | 100% in basis points.
+bps : Decimal
+bps = 10000.0
+
+-- | The smallest step a Decimal can take (10 decimal places).
+tick : Decimal
+tick = 0.0000000001
+
+-- | a / b rounded down to the last decimal place. Decimal division rounds
+-- half-even, so step back one tick whenever that rounded up.
+divDown : Decimal -> Decimal -> Decimal
+divDown a b =
+  let q = a / b
+  in if q * b > a then q - tick else q
+
+-- | Constant-product output for an exact input, after the fee. Rounded down,
+-- and walked back further if Decimal rounding would let the pool's product
+-- shrink: the curve must never pay out more than it takes in.
+quoteOut : Int -> Decimal -> Decimal -> Decimal -> Decimal
+quoteOut feeBps reserveIn reserveOut amountIn =
+  let keep = intToDecimal (10000 - feeBps)
+      raw = divDown (amountIn * keep * reserveOut) (reserveIn * bps + amountIn * keep)
+  in settleOut reserveIn reserveOut amountIn 0 raw
+
+-- Recursion has to live at the top level in Daml.
+settleOut : Decimal -> Decimal -> Decimal -> Int -> Decimal -> Decimal
+settleOut reserveIn reserveOut amountIn n out
+  | out <= 0.0 = 0.0
+  | n >= 5 || productHolds reserveIn reserveOut amountIn out = out
+  | otherwise = settleOut reserveIn reserveOut amountIn (n + 1) (out - tick)
+
+-- | True if paying `out` for `amountIn` keeps x * y from going down.
+productHolds : Decimal -> Decimal -> Decimal -> Decimal -> Bool
+productHolds reserveIn reserveOut amountIn out =
+  (reserveIn + amountIn) * (reserveOut - out) >= reserveIn * reserveOut
+
+-- | Split `total` across `weights` so the parts add up to exactly `total`.
+-- Each part is rounded down; what rounding leaves over goes to the largest
+-- weight, which is the one least affected by a few ticks.
+splitProRata : Decimal -> [Decimal] -> [Decimal]
+splitProRata _ [] = []
+splitProRata total weights =
+  let whole = sum weights
+      parts = map (\w -> divDown (total * w) whole) weights
+      rest = total - sum parts
+      biggest = indexOfMax weights
+  in zipWith (\i p -> if i == biggest then p + rest else p) [0 .. length weights - 1] parts
+
+indexOfMax : [Decimal] -> Int
+indexOfMax [] = 0
+indexOfMax (w :: ws) = maxFrom 1 0 w ws
+
+maxFrom : Int -> Int -> Decimal -> [Decimal] -> Int
+maxFrom _ best _ [] = best
+maxFrom i best top (x :: xs)
+  | x > top = maxFrom (i + 1) i x xs
+  | otherwise = maxFrom (i + 1) best top xs
+
+-- | True if a deposit of (a, b) is within `toleranceBps` of the pool price
+-- reserveB / reserveA. Cross-multiplied so nothing is divided.
+withinRatio : Int -> Decimal -> Decimal -> Decimal -> Decimal -> Bool
+withinRatio toleranceBps reserveA reserveB a b =
+  let expected = a * reserveB
+      actual = b * reserveA
+  in abs (actual - expected) * bps <= intToDecimal toleranceBps * expected

@@ -1,0 +1,277 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | What traders and providers sign. Each order is placed from the user's
+-- wallet in a single transaction (create-and-exercise of the `*_Place`
+-- choice), which locks the funds through the registry and files a request
+-- for the operator to fill or reject.
+module Orvane.Dex.Orders where
+
+import DA.Foldable (forA_)
+import DA.Text qualified as T
+import DA.TextMap qualified as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV2 qualified as H
+import Splice.Api.Token.AllocationV2 qualified as A
+import Splice.Api.Token.AllocationInstructionV2 qualified as AI
+
+import Orvane.Dex.State
+import Orvane.Dex.Token
+
+-- | A record that the operator turned a request down, so the user's wallet
+-- can say why.
+template RequestRejected
+  with
+    operator : Party
+    party : Party
+    poolId : Text
+    requestId : Text
+    reason : Text
+  where
+    signatory operator
+    observer party
+
+-- Swaps
+--------
+
+-- | A trader's order to sell exactly `amountIn` for at least `minOut`.
+template SwapOrder
+  with
+    trader : Party
+    operator : Party
+    poolId : Text
+    requestId : Text
+    instrumentIn : H.InstrumentId
+    amountIn : Decimal
+    instrumentOut : H.InstrumentId
+    minOut : Decimal
+    deadline : Time
+  where
+    signatory trader
+    ensure amountIn > 0.0 && minOut > 0.0 && instrumentIn /= instrumentOut && not (T.isEmpty requestId)
+
+    -- Lock the input for the operator. The allocation names the exact leg
+    -- (trader to operator, `amountIn`), so it can be settled for nothing
+    -- else, and it is not committed: the trader can pull it back at any time
+    -- before the swap settles.
+    choice SwapOrder_Place : ContractId SwapRequest
+      with
+        allocationFactory : ContractId AI.AllocationFactory
+        inputHoldingCids : [ContractId H.Holding]
+        requestedAt : Time
+        extraArgs : ExtraArgs
+      controller trader
+      do
+        let input = leg (requestId <> "/in") trader operator amountIn instrumentIn.id
+        inputAllocation <- allocate instrumentIn.admin allocationFactory AI.AllocationFactory_Allocate with
+          settlement = poolSettlement operator poolId
+          allocation = oneShot instrumentIn.admin trader [senderSide input] (Some deadline)
+          requestedAt
+          inputHoldingCids
+          extraArgs
+          actors = [trader]
+        create SwapRequest with ..
+
+template SwapRequest
+  with
+    trader : Party
+    operator : Party
+    poolId : Text
+    requestId : Text
+    instrumentIn : H.InstrumentId
+    amountIn : Decimal
+    instrumentOut : H.InstrumentId
+    minOut : Decimal
+    deadline : Time
+    inputAllocation : ContractId A.Allocation
+  where
+    signatory trader
+    observer operator
+
+    -- Called by the pool while it settles the swap: create the trader's
+    -- receipt for exactly `amountOut`, which must meet the trader's minimum.
+    -- The check lives here, in the contract the trader signed, so it holds
+    -- whatever the operator passes in.
+    choice SwapRequest_Fill : ContractId A.Allocation
+      with
+        amountOut : Decimal
+        allocationFactory : ContractId AI.AllocationFactory
+        requestedAt : Time
+        extraArgs : ExtraArgs
+      controller operator
+      do
+        require "the output meets the trader's minimum" (amountOut >= minOut)
+        let output = leg (requestId <> "/out") operator trader amountOut instrumentOut.id
+        allocate instrumentOut.admin allocationFactory AI.AllocationFactory_Allocate with
+          settlement = poolSettlement operator poolId
+          allocation = oneShot instrumentOut.admin trader [receiverSide output] (Some deadline)
+          requestedAt
+          inputHoldingCids = []
+          extraArgs
+          actors = [trader]
+
+    -- Turn the swap down and hand the trader's funds straight back. Pass no
+    -- cancel arguments if the trader already took the allocation back.
+    choice SwapRequest_Reject : ContractId RequestRejected
+      with
+        reason : Text
+        cancelArgs : Optional ExtraArgs
+      controller operator
+      do
+        forA_ cancelArgs $ \extraArgs ->
+          exercise inputAllocation A.Allocation_Cancel with actors = [operator]; extraArgs
+        create RequestRejected with party = trader; ..
+
+    -- The trader changes their mind before the swap settles.
+    choice SwapRequest_Cancel : ()
+      with
+        withdrawArgs : ExtraArgs
+      controller trader
+      do
+        _ <- exercise inputAllocation A.Allocation_Withdraw with actors = [trader]; extraArgs = withdrawArgs
+        pure ()
+
+-- Liquidity
+------------
+
+-- | A provider's order to lock `amountA` and `amountB` for the pool until
+-- `termEnd`. The funds stay in the provider's account the whole time.
+template DepositOrder
+  with
+    provider : Party
+    operator : Party
+    poolId : Text
+    requestId : Text
+    instrumentA : H.InstrumentId
+    amountA : Decimal
+    instrumentB : H.InstrumentId
+    amountB : Decimal
+    termEnd : Time
+  where
+    signatory provider
+    ensure amountA > 0.0 && amountB > 0.0 && instrumentA /= instrumentB && not (T.isEmpty requestId)
+
+    choice DepositOrder_Place : ContractId DepositRequest
+      with
+        factoryA : ContractId AI.AllocationFactory
+        holdingsA : [ContractId H.Holding]
+        extraArgsA : ExtraArgs
+        factoryB : ContractId AI.AllocationFactory
+        holdingsB : [ContractId H.Holding]
+        extraArgsB : ExtraArgs
+        requestedAt : Time
+      controller provider
+      do
+        let lock instrument amount factory holdings extraArgs =
+              allocate instrument.admin factory AI.AllocationFactory_Allocate with
+                settlement = poolSettlement operator poolId
+                allocation = providerFunding provider instrument amount termEnd
+                requestedAt
+                inputHoldingCids = holdings
+                extraArgs
+                actors = [provider]
+        allocationA <- lock instrumentA amountA factoryA holdingsA extraArgsA
+        allocationB <- lock instrumentB amountB factoryB holdingsB extraArgsB
+        create DepositRequest with ..
+
+template DepositRequest
+  with
+    provider : Party
+    operator : Party
+    poolId : Text
+    requestId : Text
+    instrumentA : H.InstrumentId
+    amountA : Decimal
+    allocationA : ContractId A.Allocation
+    instrumentB : H.InstrumentId
+    amountB : Decimal
+    allocationB : ContractId A.Allocation
+    termEnd : Time
+  where
+    signatory provider
+    observer operator
+
+    -- Consumed by the pool when it opens the position.
+    choice DepositRequest_Take : DepositRequest
+      controller operator
+      do pure this
+
+    -- The allocations are committed, so only the operator can release them
+    -- before the term ends; turning the deposit down does exactly that.
+    choice DepositRequest_Reject : ContractId RequestRejected
+      with
+        reason : Text
+        cancelArgsA : ExtraArgs
+        cancelArgsB : ExtraArgs
+      controller operator
+      do
+        _ <- exercise allocationA A.Allocation_Cancel with actors = [operator]; extraArgs = cancelArgsA
+        _ <- exercise allocationB A.Allocation_Cancel with actors = [operator]; extraArgs = cancelArgsB
+        create RequestRejected with party = provider; ..
+
+-- | A provider asks for a position back before its term ends.
+template WithdrawRequest
+  with
+    provider : Party
+    operator : Party
+    poolId : Text
+    positionId : Text
+  where
+    signatory provider
+    observer operator
+
+    choice WithdrawRequest_Take : WithdrawRequest
+      controller operator
+      do pure this
+
+    choice WithdrawRequest_Cancel : ()
+      controller provider
+      do pure ()
+
+-- | A provider asks to keep a position open for a new term. The operator
+-- releases the old allocations and locks the same amounts again until
+-- `termEnd`, in one transaction, so the position never leaves the pool.
+template RenewRequest
+  with
+    provider : Party
+    operator : Party
+    poolId : Text
+    positionId : Text
+    termEnd : Time
+  where
+    signatory provider
+    observer operator
+
+    choice RenewRequest_Execute : (ContractId A.Allocation, ContractId A.Allocation)
+      with
+        positionCid : ContractId LpPosition
+        cancelArgsA : ExtraArgs
+        factoryA : ContractId AI.AllocationFactory
+        allocateArgsA : ExtraArgs
+        cancelArgsB : ExtraArgs
+        factoryB : ContractId AI.AllocationFactory
+        allocateArgsB : ExtraArgs
+        requestedAt : Time
+      controller operator
+      do
+        p <- fetch positionCid
+        requireEq "position provider" p.provider provider
+        requireEq "position id" p.positionId positionId
+        requireEq "position pool" p.poolId poolId
+        let relock allocationCid instrument amount cancelArgs factory allocateArgs = do
+              released <- exercise allocationCid A.Allocation_Cancel with actors = [operator]; extraArgs = cancelArgs
+              allocate instrument.admin factory AI.AllocationFactory_Allocate with
+                settlement = poolSettlement operator poolId
+                allocation = providerFunding provider instrument amount termEnd
+                requestedAt
+                inputHoldingCids = concatMap snd (TextMap.toList released.authorizerHoldingCids)
+                extraArgs = allocateArgs
+                actors = [provider]
+        newA <- relock p.allocationA p.instrumentA p.amountA cancelArgsA factoryA allocateArgsA
+        newB <- relock p.allocationB p.instrumentB p.amountB cancelArgsB factoryB allocateArgsB
+        pure (newA, newB)
+
+    choice RenewRequest_Cancel : ()
+      controller provider
+      do pure ()

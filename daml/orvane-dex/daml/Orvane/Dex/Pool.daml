@@ -1,0 +1,425 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The pool: a constant-product market whose liquidity never leaves the
+-- providers' own accounts.
+--
+-- Every provider's funds sit in two committed, iterated allocations
+-- (one per asset) with the operator as executor. A swap settles in one
+-- transaction: the trader's input is spread over all positions in
+-- proportion to what each holds of that asset, the output is taken from
+-- them the same way, and each provider's allocation rolls into its next
+-- iteration with the new amount. The operator sits in the middle of every
+-- leg, so traders and providers never learn who is on the other side.
+module Orvane.Dex.Pool where
+
+import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
+import DA.Action (when)
+import DA.Foldable (forA_)
+import DA.List ((!!), unique)
+import DA.Time (RelTime, addRelTime, days, minutes)
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV2 qualified as H
+import Splice.Api.Token.AllocationV2 qualified as A
+import Splice.Api.Token.AllocationInstructionV2 qualified as AI
+
+import Orvane.Dex.Math
+import Orvane.Dex.Orders
+import Orvane.Dex.State
+import Orvane.Dex.Token
+
+-- | Positions per pool. Each swap settles one allocation per position per
+-- asset in a single batch, and registries only promise batches of about
+-- fifty allocations.
+maxPoolPositions : Int
+maxPoolPositions = 20
+
+data SwapResult = SwapResult with
+    stateCid : ContractId PoolState
+    receiptCid : ContractId SwapReceipt
+    amountOut : Decimal
+    positionCids : [ContractId LpPosition]
+  deriving (Eq, Show)
+
+-- | A pool's fixed terms and the operator's choices on it. Never changes
+-- after creation; the running totals live in `PoolState`.
+template PoolRules
+  with
+    operator : Party
+    poolId : Text
+    instrumentA : H.InstrumentId
+    instrumentB : H.InstrumentId
+    feeBps : Int
+      -- ^ Taken from the input of every swap and left in the pool, so it
+      -- goes to the providers.
+    maxPositions : Int
+    minTerm : RelTime
+    maxTerm : RelTime
+    ratioToleranceBps : Int
+      -- ^ How far a new deposit may stray from the pool price.
+  where
+    signatory operator
+    ensure
+      instrumentA.admin /= instrumentB.admin
+        && feeBps >= 0 && feeBps <= 1000
+        && maxPositions > 0 && maxPositions <= maxPoolPositions
+        && minTerm >= minutes 0 && minTerm <= maxTerm && maxTerm <= days 90
+        && ratioToleranceBps >= 0 && ratioToleranceBps <= 1000
+
+    nonconsuming choice PoolRules_AddLiquidity : (ContractId PoolState, ContractId LpPosition)
+      with
+        stateCid : ContractId PoolState
+        requestCid : ContractId DepositRequest
+        asOf : Time
+      controller operator
+      do
+        checkAsOf asOf
+        state <- fetchState operator poolId stateCid
+        requireEq "pool status" state.status Active
+        require "the pool has room for another position" (state.positions < maxPositions)
+        req <- exercise requestCid DepositRequest_Take
+        requireEq "request operator" req.operator operator
+        requireEq "request pool" req.poolId poolId
+        requireEq "first instrument" req.instrumentA instrumentA
+        requireEq "second instrument" req.instrumentB instrumentB
+        checkTerm minTerm maxTerm asOf req.termEnd
+        let settlement = poolSettlement operator poolId
+        checkFunding settlement req.provider instrumentA req.amountA req.termEnd req.allocationA
+        checkFunding settlement req.provider instrumentB req.amountB req.termEnd req.allocationB
+        -- the first deposit sets the price; later ones have to follow it
+        when (state.positions > 0) $
+          require "the deposit is close enough to the pool price"
+            (withinRatio ratioToleranceBps state.reserveA state.reserveB req.amountA req.amountB)
+        archive stateCid
+        newState <- create state with
+          reserveA = state.reserveA + req.amountA
+          reserveB = state.reserveB + req.amountB
+          positions = state.positions + 1
+        positionCid <- create LpPosition with
+          operator
+          provider = req.provider
+          poolId
+          positionId = req.requestId
+          instrumentA
+          allocationA = req.allocationA
+          amountA = req.amountA
+          instrumentB
+          allocationB = req.allocationB
+          amountB = req.amountB
+          termEnd = req.termEnd
+          openedAt = asOf
+        pure (newState, positionCid)
+
+    nonconsuming choice PoolRules_Swap : SwapResult
+      with
+        stateCid : ContractId PoolState
+        positionCids : [ContractId LpPosition]
+          -- ^ All of the pool's open positions.
+        requestCid : ContractId SwapRequest
+        registryIn : Registry
+        registryOut : Registry
+        asOf : Time
+      controller operator
+      do
+        checkAsOf asOf
+        state <- fetchState operator poolId stateCid
+        requireEq "pool status" state.status Active
+        req <- fetch requestCid
+        requireEq "request operator" req.operator operator
+        requireEq "request pool" req.poolId poolId
+        assertWithinDeadline "swap deadline" req.deadline
+        let aToB = req.instrumentIn == instrumentA && req.instrumentOut == instrumentB
+        require "the request trades this pool's pair"
+          (aToB || (req.instrumentIn == instrumentB && req.instrumentOut == instrumentA))
+
+        -- every open position takes part, and each still holds what we think
+        positions <- forA positionCids (fetchPosition operator poolId)
+        requireEq "positions in the swap" (length positions) state.positions
+        require "no position is listed twice" (unique positionCids)
+        let settlement = poolSettlement operator poolId
+        forA_ positions (checkLive settlement)
+        requireEq "reserve A" (sum (map (.amountA) positions)) state.reserveA
+        requireEq "reserve B" (sum (map (.amountB) positions)) state.reserveB
+
+        -- price it
+        let sideIn p = if aToB then (p.allocationA, p.amountA) else (p.allocationB, p.amountB)
+            sideOut p = if aToB then (p.allocationB, p.amountB) else (p.allocationA, p.amountA)
+            (reserveIn, reserveOut) = if aToB then (state.reserveA, state.reserveB) else (state.reserveB, state.reserveA)
+            out = quoteOut feeBps reserveIn reserveOut req.amountIn
+        require "the swap pays out something" (out > 0.0)
+        require "the pool keeps some of the output asset" (out < reserveOut)
+        require "x * y does not go down" (productHolds reserveIn reserveOut req.amountIn out)
+        require "the output meets the trader's minimum" (out >= req.minOut)
+
+        -- split both sides over the positions
+        let n = length positions
+            inShares = splitProRata req.amountIn (map (snd . sideIn) positions)
+            outShares = splitProRata out (map (snd . sideOut) positions)
+            rid = req.requestId
+            idIn = req.instrumentIn.id
+            idOut = req.instrumentOut.id
+            traderIn = leg (rid <> "/in") req.trader operator req.amountIn idIn
+            traderOut = leg (rid <> "/out") operator req.trader out idOut
+            lpIn = [ (i, leg (rid <> "/in/" <> show i) operator p.provider x idIn)
+                   | (i, p, x) <- zip3 [0 .. n - 1] positions inShares, x > 0.0 ]
+            lpOut = [ (i, leg (rid <> "/out/" <> show i) p.provider operator y idOut)
+                    | (i, p, y) <- zip3 [0 .. n - 1] positions outShares, y > 0.0 ]
+        forA_ (zip positions outShares) $ \(p, y) ->
+          require "every position keeps some of the output asset" (snd (sideOut p) - y > 0.0)
+
+        -- the trader's receipt, made with the trader's authority through
+        -- their request, and the operator's pass-through allocations
+        receipt <- exercise requestCid SwapRequest_Fill with
+          amountOut = out
+          allocationFactory = registryOut.allocationFactory
+          requestedAt = asOf
+          extraArgs = registryOut.allocateArgs
+        let passThrough admin registry sides = allocate admin registry.allocationFactory AI.AllocationFactory_Allocate with
+              settlement
+              allocation = oneShot admin operator sides None
+              requestedAt = asOf
+              inputHoldingCids = []
+              extraArgs = registry.allocateArgs
+              actors = [operator]
+        hubIn <- passThrough req.instrumentIn.admin registryIn (receiverSide traderIn :: map (senderSide . snd) lpIn)
+        hubOut <- passThrough req.instrumentOut.admin registryOut (senderSide traderOut :: map (receiverSide . snd) lpOut)
+
+        -- settle each asset in one batch at its registry
+        settledIn <- exercise registryIn.settlementFactory A.SettlementFactory_SettleBatch with
+          settlement
+          transferLegs = traderIn :: map snd lpIn
+          allocations = settleOnce req.inputAllocation :: settleOnce hubIn ::
+            [ settleIteration cid [receiverSide l] idIn (held + l.amount)
+            | (i, l) <- lpIn, let (cid, held) = sideIn (positions !! i) ]
+          actors = [operator]
+          extraArgs = registryIn.settleArgs
+        settledOut <- exercise registryOut.settlementFactory A.SettlementFactory_SettleBatch with
+          settlement
+          transferLegs = traderOut :: map snd lpOut
+          allocations = settleOnce receipt :: settleOnce hubOut ::
+            [ settleIteration cid [senderSide l] idOut (held - l.amount)
+            | (i, l) <- lpOut, let (cid, held) = sideOut (positions !! i) ]
+          actors = [operator]
+          extraArgs = registryOut.settleArgs
+        nextIn <- forA (drop 2 settledIn.allocationSettleResults) nextAllocation
+        nextOut <- forA (drop 2 settledOut.allocationSettleResults) nextAllocation
+
+        -- write the positions back
+        let credits = zip (map fst lpIn) (zip nextIn (map ((.amount) . snd) lpIn))
+            debits = zip (map fst lpOut) (zip nextOut (map ((.amount) . snd) lpOut))
+            credit p (cid, x) = if aToB then p with allocationA = cid; amountA = p.amountA + x
+                                        else p with allocationB = cid; amountB = p.amountB + x
+            debit p (cid, y) = if aToB then p with allocationB = cid; amountB = p.amountB - y
+                                       else p with allocationA = cid; amountA = p.amountA - y
+            updated = [ (cid, p, optional p (credit p) (lookup i credits), lookup i debits)
+                      | (i, cid, p) <- zip3 [0 .. n - 1] positionCids positions ]
+            moved = [ (cid, optional p' (debit p') d, p /= p' || d /= None) | (cid, p, p', d) <- updated ]
+            (newReserveA, newReserveB) =
+              if aToB then (state.reserveA + req.amountIn, state.reserveB - out)
+                      else (state.reserveA - out, state.reserveB + req.amountIn)
+        requireEq "reserve A after the swap" (sum [ p.amountA | (_, p, _) <- moved ]) newReserveA
+        requireEq "reserve B after the swap" (sum [ p.amountB | (_, p, _) <- moved ]) newReserveB
+        newPositions <- forA moved $ \(cid, p, changed) ->
+          if changed then archive cid >> create p else pure cid
+
+        archive stateCid
+        newState <- create state with
+          reserveA = newReserveA
+          reserveB = newReserveB
+          swaps = state.swaps + 1
+        receiptCid <- create SwapReceipt with
+          operator
+          trader = req.trader
+          poolId
+          requestId = rid
+          instrumentIn = req.instrumentIn
+          amountIn = req.amountIn
+          instrumentOut = req.instrumentOut
+          amountOut = out
+          settledAt = asOf
+        pure SwapResult with
+          stateCid = newState
+          receiptCid
+          amountOut = out
+          positionCids = newPositions
+
+    -- Hand a position back on the provider's request. Allowed while the
+    -- pool is paused, so providers can always leave.
+    nonconsuming choice PoolRules_RemoveLiquidity : ContractId PoolState
+      with
+        stateCid : ContractId PoolState
+        positionCid : ContractId LpPosition
+        requestCid : ContractId WithdrawRequest
+        cancelArgsA : ExtraArgs
+        cancelArgsB : ExtraArgs
+        asOf : Time
+      controller operator
+      do
+        checkAsOf asOf
+        state <- fetchState operator poolId stateCid
+        p <- fetchPosition operator poolId positionCid
+        req <- exercise requestCid WithdrawRequest_Take
+        requireEq "request operator" req.operator operator
+        requireEq "request pool" req.poolId poolId
+        requireEq "request provider" req.provider p.provider
+        requireEq "request position" req.positionId p.positionId
+        _ <- exercise p.allocationA A.Allocation_Cancel with actors = [operator]; extraArgs = cancelArgsA
+        _ <- exercise p.allocationB A.Allocation_Cancel with actors = [operator]; extraArgs = cancelArgsB
+        closePosition state stateCid positionCid p Withdrawn asOf
+
+    -- Take a position out of the books once its term is over. By then the
+    -- provider can withdraw the allocations themselves and the registry
+    -- expires them, so the funds are back with the provider whether or not
+    -- the operator is around. Pass cancel arguments to release them now.
+    nonconsuming choice PoolRules_DropExpired : ContractId PoolState
+      with
+        stateCid : ContractId PoolState
+        positionCid : ContractId LpPosition
+        cancelArgs : Optional (ExtraArgs, ExtraArgs)
+        asOf : Time
+      controller operator
+      do
+        checkAsOf asOf
+        state <- fetchState operator poolId stateCid
+        p <- fetchPosition operator poolId positionCid
+        assertDeadlineExceeded "position term" p.termEnd
+        forA_ cancelArgs $ \(argsA, argsB) -> do
+          _ <- exercise p.allocationA A.Allocation_Cancel with actors = [operator]; extraArgs = argsA
+          exercise p.allocationB A.Allocation_Cancel with actors = [operator]; extraArgs = argsB
+        closePosition state stateCid positionCid p TermEnded asOf
+
+    -- Lock a position for a new term, at the provider's request.
+    nonconsuming choice PoolRules_Renew : ContractId LpPosition
+      with
+        positionCid : ContractId LpPosition
+        requestCid : ContractId RenewRequest
+        cancelArgsA : ExtraArgs
+        registryA : Registry
+        cancelArgsB : ExtraArgs
+        registryB : Registry
+        asOf : Time
+      controller operator
+      do
+        checkAsOf asOf
+        p <- fetchPosition operator poolId positionCid
+        req <- fetch requestCid
+        requireEq "request operator" req.operator operator
+        requireEq "request pool" req.poolId poolId
+        assertWithinDeadline "current term" p.termEnd
+        checkTerm minTerm maxTerm asOf req.termEnd
+        require "the new term ends later than the current one" (req.termEnd > p.termEnd)
+        (newA, newB) <- exercise requestCid RenewRequest_Execute with
+          positionCid
+          cancelArgsA
+          factoryA = registryA.allocationFactory
+          allocateArgsA = registryA.allocateArgs
+          cancelArgsB
+          factoryB = registryB.allocationFactory
+          allocateArgsB = registryB.allocateArgs
+          requestedAt = asOf
+        let settlement = poolSettlement operator poolId
+        checkFunding settlement p.provider instrumentA p.amountA req.termEnd newA
+        checkFunding settlement p.provider instrumentB p.amountB req.termEnd newB
+        archive positionCid
+        create p with allocationA = newA; allocationB = newB; termEnd = req.termEnd
+
+    nonconsuming choice PoolRules_Pause : ContractId PoolState
+      with
+        stateCid : ContractId PoolState
+      controller operator
+      do setStatus operator poolId stateCid Paused
+
+    nonconsuming choice PoolRules_Resume : ContractId PoolState
+      with
+        stateCid : ContractId PoolState
+      controller operator
+      do setStatus operator poolId stateCid Active
+
+    -- The pool's first, empty state. Only valid while there is none, which
+    -- the operator's setup guarantees by creating it right after the rules.
+    nonconsuming choice PoolRules_Open : ContractId PoolState
+      controller operator
+      do create PoolState with
+           operator
+           poolId
+           reserveA = 0.0
+           reserveB = 0.0
+           positions = 0
+           status = Active
+           swaps = 0
+
+-- Helpers
+----------
+
+-- | `asOf` is the operator's clock when it built the transaction. It has to
+-- be in the past and no more than ten minutes old.
+checkAsOf : Time -> Update ()
+checkAsOf asOf = do
+  assertDeadlineExceeded "asOf" asOf
+  assertWithinDeadline "asOf freshness" (addRelTime asOf (minutes 10))
+
+checkTerm : RelTime -> RelTime -> Time -> Time -> Update ()
+checkTerm minTerm maxTerm asOf termEnd = do
+  require "the term is not shorter than the pool's minimum" (termEnd >= addRelTime asOf minTerm)
+  require "the term is not longer than the pool's maximum" (termEnd <= addRelTime asOf maxTerm)
+  assertWithinDeadline "term end" termEnd
+
+setStatus : Party -> Text -> ContractId PoolState -> PoolStatus -> Update (ContractId PoolState)
+setStatus operator poolId stateCid status = do
+  state <- fetchState operator poolId stateCid
+  archive stateCid
+  create state with status
+
+fetchState : Party -> Text -> ContractId PoolState -> Update PoolState
+fetchState operator poolId cid = do
+  s <- fetch cid
+  requireEq "pool state operator" s.operator operator
+  requireEq "pool state id" s.poolId poolId
+  pure s
+
+fetchPosition : Party -> Text -> ContractId LpPosition -> Update LpPosition
+fetchPosition operator poolId cid = do
+  p <- fetch cid
+  requireEq "position operator" p.operator operator
+  requireEq "position pool" p.poolId poolId
+  pure p
+
+-- | A provider's allocation holds exactly what the position says, for this
+-- pool, until the end of the term, and the registry will not expire it
+-- earlier.
+checkFunding : A.SettlementInfo -> Party -> H.InstrumentId -> Decimal -> Time -> ContractId A.Allocation -> Update ()
+checkFunding settlement provider instrument amount termEnd cid = do
+  v <- view <$> fetch cid
+  requireEq "allocation settlement" v.settlement settlement
+  requireEq "allocation terms" v.allocation (providerFunding provider instrument amount termEnd)
+  forA_ v.expiresAt $ \expiresAt ->
+    require "the registry keeps the allocation until the end of the term" (expiresAt >= termEnd)
+
+-- | A position can take part in a swap: inside its term, and both
+-- allocations still match it.
+checkLive : A.SettlementInfo -> LpPosition -> Update ()
+checkLive settlement p = do
+  assertWithinDeadline "position term" p.termEnd
+  checkFunding settlement p.provider p.instrumentA p.amountA p.termEnd p.allocationA
+  checkFunding settlement p.provider p.instrumentB p.amountB p.termEnd p.allocationB
+
+closePosition : PoolState -> ContractId PoolState -> ContractId LpPosition -> LpPosition -> CloseReason -> Time -> Update (ContractId PoolState)
+closePosition state stateCid positionCid p reason asOf = do
+  archive positionCid
+  archive stateCid
+  _ <- create PositionClosed with
+    operator = p.operator
+    provider = p.provider
+    poolId = p.poolId
+    positionId = p.positionId
+    instrumentA = p.instrumentA
+    amountA = p.amountA
+    instrumentB = p.instrumentB
+    amountB = p.amountB
+    reason
+    closedAt = asOf
+  create state with
+    reserveA = state.reserveA - p.amountA
+    reserveB = state.reserveB - p.amountB
+    positions = state.positions - 1

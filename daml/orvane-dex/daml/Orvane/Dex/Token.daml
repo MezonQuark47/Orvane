@@ -1,0 +1,135 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Small helpers over the CIP-0112 (token standard V2) allocation API: the
+-- pool's settlement identity, the allocation shapes Orvane uses, and a
+-- checked call into a registry's allocation factory.
+module Orvane.Dex.Token where
+
+import DA.Action (unless)
+import DA.TextMap qualified as TextMap
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV2 qualified as H
+import Splice.Api.Token.AllocationV2 qualified as A
+import Splice.Api.Token.AllocationInstructionV2 qualified as AI
+
+-- | The registry contracts and choice context the operator needs to work
+-- with one instrument admin inside a transaction. Fetched off-ledger from
+-- the admin's registry API right before submitting.
+data Registry = Registry with
+    allocationFactory : ContractId AI.AllocationFactory
+    settlementFactory : ContractId A.SettlementFactory
+    allocateArgs : ExtraArgs
+    settleArgs : ExtraArgs
+  deriving (Eq, Show)
+
+-- | A party's default account at a registry.
+basicAccount : Party -> H.Account
+basicAccount p = H.Account with owner = Some p; provider = None; id = ""
+
+-- | Every allocation for a pool carries this settlement. It names the
+-- operator as the only executor, and it is the same for every swap, deposit
+-- and renewal of the pool, which is what lets one batch settle a trader's
+-- allocation together with the providers' long-lived ones.
+poolSettlement : Party -> Text -> A.SettlementInfo
+poolSettlement operator poolId = A.SettlementInfo with
+  executors = [operator]
+  id = "orvane/" <> poolId
+  cid = None
+  meta = emptyMetadata
+
+-- | A provider's side of a position: funds locked for the pool until
+-- `termEnd`, committed so they stay available to swaps, and iterated so
+-- every swap settles against the same allocation and rolls it forward.
+providerFunding : Party -> H.InstrumentId -> Decimal -> Time -> A.AllocationSpecification
+providerFunding provider instrument amount termEnd = A.AllocationSpecification with
+  admin = instrument.admin
+  authorizer = basicAccount provider
+  transferLegSides = []
+  settlementDeadline = Some termEnd
+  nextIterationFunding = Some (TextMap.fromList [(instrument.id, amount)])
+  committed = True
+  meta = emptyMetadata
+
+-- | A one-shot allocation for exactly the given leg sides.
+oneShot : Party -> Party -> [A.TransferLegSide] -> Optional Time -> A.AllocationSpecification
+oneShot admin owner sides deadline = A.AllocationSpecification with
+  admin
+  authorizer = basicAccount owner
+  transferLegSides = sides
+  settlementDeadline = deadline
+  nextIterationFunding = None
+  committed = False
+  meta = emptyMetadata
+
+leg : Text -> Party -> Party -> Decimal -> Text -> A.TransferLeg
+leg transferLegId from to amount instrumentId = A.TransferLeg with
+  transferLegId
+  sender = basicAccount from
+  receiver = basicAccount to
+  amount
+  instrumentId
+  meta = emptyMetadata
+
+senderSide : A.TransferLeg -> A.TransferLegSide
+senderSide l = A.TransferLegSide with
+  transferLegId = l.transferLegId
+  side = A.SenderSide
+  otherside = l.receiver
+  amount = l.amount
+  instrumentId = l.instrumentId
+  meta = l.meta
+
+receiverSide : A.TransferLeg -> A.TransferLegSide
+receiverSide l = A.TransferLegSide with
+  transferLegId = l.transferLegId
+  side = A.ReceiverSide
+  otherside = l.sender
+  amount = l.amount
+  instrumentId = l.instrumentId
+  meta = l.meta
+
+settleOnce : ContractId A.Allocation -> A.FinalizedAllocation
+settleOnce allocationCid = A.FinalizedAllocation with
+  allocationCid
+  extraTransferLegSides = []
+  nextIterationFunding = None
+
+-- | Settle one iteration of a provider's allocation: add the given legs and
+-- lock `remaining` for the next one.
+settleIteration : ContractId A.Allocation -> [A.TransferLegSide] -> Text -> Decimal -> A.FinalizedAllocation
+settleIteration allocationCid sides instrumentId remaining = A.FinalizedAllocation with
+  allocationCid
+  extraTransferLegSides = sides
+  nextIterationFunding = Some (TextMap.fromList [(instrumentId, remaining)])
+
+-- | Create an allocation through a registry factory. The factory has to
+-- answer for the expected admin, and the registry has to complete the
+-- allocation in this transaction: a pending, multi-step allocation would
+-- leave a swap half done.
+allocate : Party -> ContractId AI.AllocationFactory -> AI.AllocationFactory_Allocate -> Update (ContractId A.Allocation)
+allocate admin factoryCid arg = do
+  factory <- exercise factoryCid AI.AllocationFactory_PublicFetch with actors = arg.actors
+  requireEq "allocation factory admin" factory.admin admin
+  requireEq "allocation admin" arg.allocation.admin admin
+  result <- exercise factoryCid arg
+  case result.output of
+    AI.AllocationInstructionResult_Completed cid -> pure cid
+    AI.AllocationInstructionResult_Pending _ -> abort "registry returned a pending allocation; Orvane needs it completed in one step"
+    AI.AllocationInstructionResult_Failed -> abort "registry failed to create the allocation"
+
+-- | The allocation that settling an iterated allocation rolled into.
+nextAllocation : A.AllocationResult -> Update (ContractId A.Allocation)
+nextAllocation result = case result.output of
+  A.AllocationResult_Settled (Some cid) -> pure cid
+  _ -> abort "expected the provider's allocation to roll into a next iteration"
+
+-- | Fail with a message that says what was expected.
+require : Text -> Bool -> Update ()
+require what ok = unless ok (abort ("check failed: " <> what))
+
+requireEq : (Eq a, Show a) => Text -> a -> a -> Update ()
+requireEq what actual expected =
+  unless (actual == expected) $
+    abort ("check failed: " <> what <> ": expected " <> show expected <> ", got " <> show actual)

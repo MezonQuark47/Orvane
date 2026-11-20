@@ -1,0 +1,512 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The pool's behaviour against real V2 allocations: liquidity, swaps,
+-- exits, terms, renewals, pausing, privacy, and the books balancing after
+-- a long run of trades.
+module Test.Dex where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import DA.Time
+
+import Daml.Script
+
+import Splice.Api.Token.AllocationV2 qualified as A
+
+import Orvane.Dex.Math
+import Orvane.Dex.Orders
+import Orvane.Dex.Pool
+import Orvane.Dex.State
+import Orvane.Dex.Token
+import Test.Env
+
+-- Shared checks
+----------------
+
+-- | The pool's books match its positions, and every position is backed by
+-- exactly that much locked in its provider's account.
+checkBooks : Env -> Script ()
+checkBooks env = do
+  (_, s) <- poolState env
+  ps <- positionsOf env
+  s.positions === length ps
+  s.reserveA === sum [ p.amountA | (_, p) <- ps ]
+  s.reserveB === sum [ p.amountB | (_, p) <- ps ]
+  forA_ ps $ \(_, p) -> do
+    lockedA <- locked p.provider env.cc
+    lockedB <- locked p.provider env.usd
+    lockedA === p.amountA
+    lockedB === p.amountB
+
+poolProduct : Env -> Script Decimal
+poolProduct env = do
+  (_, s) <- poolState env
+  pure (s.reserveA * s.reserveB)
+
+-- | Two providers at a 1 CC = 2 USD price: 1000/2000 and 500/1000.
+twoProviders : Script Env
+twoProviders = do
+  env <- setup
+  _ <- deposit env env.lp1 "lp1" 1000.0 2000.0
+  _ <- deposit env env.lp2 "lp2" 500.0 1000.0
+  pure env
+
+-- Math
+-------
+
+test_math : Script ()
+test_math = do
+  let out = quoteOut 30 1000.0 1000.0 10.0
+  assertMsg "fee and curve applied" (out > 9.87 && out < 9.88)
+  assertMsg "product holds" (productHolds 1000.0 1000.0 10.0 out)
+  quoteOut 0 1000.0 1000.0 0.0 === 0.0
+  -- with no fee the curve still never pays out too much
+  let noFee = quoteOut 0 3.0 7.0 1.0
+  assertMsg "no-fee product holds" (productHolds 3.0 7.0 1.0 noFee)
+
+  let thirds = splitProRata 1.0 [1.0, 1.0, 1.0]
+  sum thirds === 1.0
+  thirds === [0.3333333334, 0.3333333333, 0.3333333333]
+  splitProRata 0.0000000001 [5.0, 1.0] === [0.0000000001, 0.0]
+  sum (splitProRata 123.4567891234 [7.0, 0.0000000003, 19.25, 3.5]) === 123.4567891234
+
+  withinRatio 100 1000.0 2000.0 10.0 20.1 === True
+  withinRatio 100 1000.0 2000.0 10.0 19.9 === True
+  withinRatio 100 1000.0 2000.0 10.0 20.3 === False
+  withinRatio 100 1000.0 2000.0 10.0 19.7 === False
+
+-- Liquidity
+------------
+
+test_deposit_locks_funds_in_the_providers_account : Script ()
+test_deposit_locks_funds_in_the_providers_account = do
+  env <- twoProviders
+  (_, s) <- poolState env
+  s.reserveA === 1500.0
+  s.reserveB === 3000.0
+  s.positions === 2
+  free env.lp1 env.cc >>= (=== 99000.0)
+  free env.lp1 env.usd >>= (=== 98000.0)
+  checkBooks env
+  -- the funds sit in committed, iterated allocations the operator executes
+  allocs <- allocationsOf env.lp1
+  length allocs === 2
+  forA_ allocs $ \(_, v) -> do
+    v.allocation.committed === True
+    v.settlement === poolSettlement env.operator thePool
+    v.allocation.transferLegSides === []
+
+test_deposit_off_the_pool_price_is_rejected_and_returned : Script ()
+test_deposit_off_the_pool_price_is_rejected_and_returned = do
+  env <- twoProviders
+  req <- placeDeposit env env.lp3 "lp3" 100.0 250.0 (days 30)
+  (stateCid, _) <- poolState env
+  asOf <- asOfNow
+  ds <- disclosures env
+  submitMustFail (actAs env.operator <> discloseMany ds) $
+    exerciseCmd env.pool PoolRules_AddLiquidity with stateCid; requestCid = req; asOf
+  -- committed funds can't be pulled back by the provider, but the operator
+  -- can hand them back by rejecting
+  locked env.lp3 env.cc >>= (=== 100.0)
+  _ <- submit (actAs env.operator <> discloseMany ds) $
+    exerciseCmd req DepositRequest_Reject with
+      reason = "deposit is too far from the pool price"
+      cancelArgsA = ctx env env.cc
+      cancelArgsB = ctx env env.usd
+  free env.lp3 env.cc >>= (=== 100000.0)
+  free env.lp3 env.usd >>= (=== 100000.0)
+  rejected <- query @RequestRejected env.lp3
+  length rejected === 1
+  checkBooks env
+
+test_deposit_term_must_fit_the_pool : Script ()
+test_deposit_term_must_fit_the_pool = do
+  env <- setup
+  tooShort <- placeDeposit env env.lp1 "short" 10.0 20.0 (hours 12)
+  tooLong <- placeDeposit env env.lp2 "long" 10.0 20.0 (days 91)
+  (stateCid, _) <- poolState env
+  asOf <- asOfNow
+  ds <- disclosures env
+  forA_ [tooShort, tooLong] $ \req ->
+    submitMustFail (actAs env.operator <> discloseMany ds) $
+      exerciseCmd env.pool PoolRules_AddLiquidity with stateCid; requestCid = req; asOf
+
+test_pool_takes_at_most_max_positions : Script ()
+test_pool_takes_at_most_max_positions = do
+  env <- twoProviders
+  _ <- deposit env env.lp3 "lp3" 100.0 200.0
+  req <- placeDeposit env env.trader "fourth" 100.0 200.0 (days 30)
+  (stateCid, _) <- poolState env
+  asOf <- asOfNow
+  ds <- disclosures env
+  submitMustFail (actAs env.operator <> discloseMany ds) $
+    exerciseCmd env.pool PoolRules_AddLiquidity with stateCid; requestCid = req; asOf
+
+-- Swaps
+--------
+
+test_swap_settles_against_every_position : Script ()
+test_swap_settles_against_every_position = do
+  env <- twoProviders
+  supplyCc <- supply env.cc
+  supplyUsd <- supply env.usd
+  k0 <- poolProduct env
+  let expected = quoteOut 30 1500.0 3000.0 100.0
+
+  r <- swap env env.trader "s1" env.cc 100.0
+  r.amountOut === expected
+  free env.trader env.cc >>= (=== 99900.0)
+  free env.trader env.usd >>= (=== 100000.0 + expected)
+
+  -- the input is spread 2:1 like the positions, and so is the output
+  (_, p1) <- positionOf env env.lp1
+  (_, p2) <- positionOf env env.lp2
+  p1.amountA === 1066.6666666667
+  p2.amountA === 533.3333333333
+  p1.amountB + p2.amountB === 3000.0 - expected
+  (_, s) <- poolState env
+  s.reserveA === 1600.0
+  s.reserveB === 3000.0 - expected
+  s.swaps === 1
+  checkBooks env
+
+  k1 <- poolProduct env
+  assertMsg "x * y grows with the fee" (k1 > k0)
+  supply env.cc >>= (=== supplyCc)
+  supply env.usd >>= (=== supplyUsd)
+
+  -- and back the other way
+  r2 <- swap env env.trader "s2" env.usd 300.0
+  assertMsg "got some CC back" (r2.amountOut > 0.0)
+  checkBooks env
+  k2 <- poolProduct env
+  assertMsg "x * y grows again" (k2 > k1)
+  supply env.cc >>= (=== supplyCc)
+  supply env.usd >>= (=== supplyUsd)
+
+  receipts <- query @SwapReceipt env.trader
+  length receipts === 2
+
+test_swap_with_a_single_provider : Script ()
+test_swap_with_a_single_provider = do
+  env <- setup
+  _ <- deposit env env.lp1 "lp1" 10.0 20.0
+  _ <- swap env env.trader "s1" env.usd 5.0
+  _ <- swap env env.trader "s2" env.cc 1.0
+  checkBooks env
+
+test_swap_below_the_traders_minimum_does_not_settle : Script ()
+test_swap_below_the_traders_minimum_does_not_settle = do
+  env <- twoProviders
+  let quote = quoteOut 30 1500.0 3000.0 100.0
+  req <- placeSwap env env.trader "greedy" env.cc 100.0 (quote + 0.01)
+  fillMustFail env req
+  -- nothing moved; the input is still locked for the trader
+  locked env.trader env.cc >>= (=== 100.0)
+  checkBooks env
+  -- the operator turns it down and the funds come straight back
+  ds <- disclosures env
+  _ <- submit (actAs env.operator <> discloseMany ds) $
+    exerciseCmd req SwapRequest_Reject with reason = "price moved"; cancelArgs = Some (ctx env env.cc)
+  free env.trader env.cc >>= (=== 100000.0)
+  rejected <- query @RequestRejected env.trader
+  length rejected === 1
+
+test_stale_quote_fails_instead_of_filling_worse : Script ()
+test_stale_quote_fails_instead_of_filling_worse = do
+  env <- twoProviders
+  let quote = quoteOut 30 1500.0 3000.0 100.0
+  slow <- placeSwap env env.trader "slow" env.cc 100.0 quote
+  -- someone else trades first and moves the price
+  _ <- swap env env.lp3 "fast" env.cc 200.0
+  fillMustFail env slow
+  locked env.trader env.cc >>= (=== 100.0)
+
+test_trader_can_take_the_order_back : Script ()
+test_trader_can_take_the_order_back = do
+  env <- twoProviders
+  req <- placeSwap env env.trader "oops" env.cc 100.0 1.0
+  ds <- disclosures env
+  submit (actAs env.trader <> discloseMany ds) $
+    exerciseCmd req SwapRequest_Cancel with withdrawArgs = ctx env env.cc
+  free env.trader env.cc >>= (=== 100000.0)
+
+test_registry_only_settles_the_legs_the_trader_signed : Script ()
+test_registry_only_settles_the_legs_the_trader_signed = do
+  env <- twoProviders
+  req <- placeSwap env env.trader "exact" env.cc 100.0 1.0
+  Some r <- queryContractId env.operator req
+  ds <- disclosures env
+  -- the operator tries to take more than the trader allocated
+  submitMustFail (actAs env.operator <> discloseMany ds) $
+    exerciseCmd (registry env env.cc).settlementFactory A.SettlementFactory_SettleBatch with
+      settlement = poolSettlement env.operator thePool
+      transferLegs = [leg "exact/in" env.trader env.operator 150.0 env.cc.id]
+      allocations = [settleOnce r.inputAllocation]
+      actors = [env.operator]
+      extraArgs = ctx env env.cc
+  locked env.trader env.cc >>= (=== 100.0)
+
+-- Leaving
+----------
+
+test_provider_withdraws_their_share : Script ()
+test_provider_withdraws_their_share = do
+  env <- twoProviders
+  _ <- swap env env.trader "s1" env.cc 100.0
+  _ <- swap env env.trader "s2" env.usd 50.0
+  (_, p1) <- positionOf env env.lp1
+  (_, p2Before) <- positionOf env env.lp2
+  _ <- withdraw env env.lp1
+  -- everything that was in the position is back and spendable
+  free env.lp1 env.cc >>= (=== 99000.0 + p1.amountA)
+  free env.lp1 env.usd >>= (=== 98000.0 + p1.amountB)
+  locked env.lp1 env.cc >>= (=== 0.0)
+  locked env.lp1 env.usd >>= (=== 0.0)
+  (_, p2) <- positionOf env env.lp2
+  p2 === p2Before
+  (_, s) <- poolState env
+  s.positions === 1
+  checkBooks env
+  closed <- query @PositionClosed env.lp1
+  length closed === 1
+
+test_last_provider_leaving_empties_the_pool : Script ()
+test_last_provider_leaving_empties_the_pool = do
+  env <- setup
+  _ <- deposit env env.lp1 "lp1" 10.0 20.0
+  _ <- swap env env.trader "s1" env.cc 1.0
+  _ <- withdraw env env.lp1
+  (_, s) <- poolState env
+  s.reserveA === 0.0
+  s.reserveB === 0.0
+  s.positions === 0
+  -- and the next provider sets a fresh price
+  _ <- deposit env env.lp2 "lp2" 7.0 3.0
+  checkBooks env
+
+-- Terms
+--------
+
+test_committed_funds_stay_until_the_term_ends : Script ()
+test_committed_funds_stay_until_the_term_ends = do
+  env <- twoProviders
+  [(allocA, _), _] <- allocationsOf env.lp1
+  ds <- disclosures env
+  submitMustFail (actAs env.lp1 <> discloseMany ds) $
+    exerciseCmd allocA A.Allocation_Withdraw with actors = [env.lp1]; extraArgs = ctx env env.cc
+
+test_funds_come_back_after_the_term_without_the_operator : Script ()
+test_funds_come_back_after_the_term_without_the_operator = do
+  env <- twoProviders
+  _ <- swap env env.trader "s1" env.cc 100.0
+  (_, p1) <- positionOf env env.lp1
+  passTime (days 31)
+  -- the pool stops using positions whose term is over
+  req <- placeSwap env env.trader "late" env.cc 10.0 1.0
+  fillMustFail env req
+  -- the provider takes their funds back on their own
+  allocs <- allocationsOf env.lp1
+  forA_ allocs $ \(cid, v) -> do
+    let instrument = if v.allocation.admin == env.cc.admin then env.cc else env.usd
+    ds <- disclosures env
+    submit (actAs env.lp1 <> discloseMany ds) $
+      exerciseCmd cid A.Allocation_Withdraw with actors = [env.lp1]; extraArgs = ctx env instrument
+  free env.lp1 env.cc >>= (=== 99000.0 + p1.amountA)
+  free env.lp1 env.usd >>= (=== 98000.0 + p1.amountB)
+  -- the operator only tidies up its books
+  (posCid, _) <- positionOf env env.lp1
+  (stateCid, _) <- poolState env
+  asOf <- asOfNow
+  _ <- submit env.operator $ exerciseCmd env.pool PoolRules_DropExpired with
+    stateCid; positionCid = posCid; cancelArgs = None; asOf
+  -- or releases them itself, if the provider has not yet
+  (posCid2, p2) <- positionOf env env.lp2
+  (stateCid2, _) <- poolState env
+  ds2 <- disclosures env
+  _ <- submit (actAs env.operator <> discloseMany ds2) $ exerciseCmd env.pool PoolRules_DropExpired with
+    stateCid = stateCid2
+    positionCid = posCid2
+    cancelArgs = Some (ctx env env.cc, ctx env env.usd)
+    asOf
+  free env.lp2 env.cc >>= (=== 99500.0 + p2.amountA)
+  (_, s) <- poolState env
+  s.positions === 0
+
+test_drop_is_only_allowed_after_the_term : Script ()
+test_drop_is_only_allowed_after_the_term = do
+  env <- twoProviders
+  (posCid, _) <- positionOf env env.lp1
+  (stateCid, _) <- poolState env
+  asOf <- asOfNow
+  submitMustFail env.operator $ exerciseCmd env.pool PoolRules_DropExpired with
+    stateCid; positionCid = posCid; cancelArgs = None; asOf
+
+test_renew_keeps_the_position_in_the_pool : Script ()
+test_renew_keeps_the_position_in_the_pool = do
+  env <- twoProviders
+  _ <- swap env env.trader "s1" env.cc 100.0
+  (posCid, p) <- positionOf env env.lp1
+  now <- getTime
+  let newEnd = addRelTime now (days 60)
+  req <- submit env.lp1 $ createCmd RenewRequest with
+    provider = env.lp1
+    operator = env.operator
+    poolId = thePool
+    positionId = p.positionId
+    termEnd = newEnd
+  asOf <- asOfNow
+  ds <- disclosures env
+  renewed <- submit (actAs env.operator <> discloseMany ds) $
+    exerciseCmd env.pool PoolRules_Renew with
+      positionCid = posCid
+      requestCid = req
+      cancelArgsA = ctx env env.cc
+      registryA = registry env env.cc
+      cancelArgsB = ctx env env.usd
+      registryB = registry env env.usd
+      asOf
+  Some p' <- queryContractId env.operator renewed
+  p'.termEnd === newEnd
+  p'.amountA === p.amountA
+  p'.amountB === p.amountB
+  checkBooks env
+  -- the old term passing no longer matters for this position
+  passTime (days 31)
+  (otherCid, _) <- positionOf env env.lp2
+  (stateCid, _) <- poolState env
+  asOf2 <- asOfNow
+  ds2 <- disclosures env
+  _ <- submit (actAs env.operator <> discloseMany ds2) $ exerciseCmd env.pool PoolRules_DropExpired with
+    stateCid; positionCid = otherCid; cancelArgs = Some (ctx env env.cc, ctx env env.usd); asOf = asOf2
+  _ <- swap env env.trader "s2" env.cc 10.0
+  checkBooks env
+
+test_renew_cannot_go_past_the_maximum_term : Script ()
+test_renew_cannot_go_past_the_maximum_term = do
+  env <- twoProviders
+  (posCid, p) <- positionOf env env.lp1
+  now <- getTime
+  req <- submit env.lp1 $ createCmd RenewRequest with
+    provider = env.lp1
+    operator = env.operator
+    poolId = thePool
+    positionId = p.positionId
+    termEnd = addRelTime now (days 91)
+  asOf <- asOfNow
+  ds <- disclosures env
+  submitMustFail (actAs env.operator <> discloseMany ds) $
+    exerciseCmd env.pool PoolRules_Renew with
+      positionCid = posCid
+      requestCid = req
+      cancelArgsA = ctx env env.cc
+      registryA = registry env env.cc
+      cancelArgsB = ctx env env.usd
+      registryB = registry env env.usd
+      asOf
+
+-- Pausing
+----------
+
+test_paused_pool_still_lets_providers_leave : Script ()
+test_paused_pool_still_lets_providers_leave = do
+  env <- twoProviders
+  (stateCid, _) <- poolState env
+  _ <- submit env.operator $ exerciseCmd env.pool PoolRules_Pause with stateCid
+  req <- placeSwap env env.trader "paused" env.cc 10.0 1.0
+  fillMustFail env req
+  dep <- placeDeposit env env.lp3 "lp3" 10.0 20.0 (days 30)
+  (stateCid2, _) <- poolState env
+  asOf <- asOfNow
+  ds <- disclosures env
+  submitMustFail (actAs env.operator <> discloseMany ds) $
+    exerciseCmd env.pool PoolRules_AddLiquidity with stateCid = stateCid2; requestCid = dep; asOf
+  _ <- withdraw env env.lp1
+  (stateCid3, _) <- poolState env
+  _ <- submit env.operator $ exerciseCmd env.pool PoolRules_Resume with stateCid = stateCid3
+  _ <- fill env req
+  checkBooks env
+
+-- Privacy
+----------
+
+test_nobody_sees_more_than_their_own_part : Script ()
+test_nobody_sees_more_than_their_own_part = do
+  env <- twoProviders
+  _ <- swap env env.trader "s1" env.cc 100.0
+
+  -- an outsider sees nothing at all
+  query @PoolState env.outsider >>= (=== [])
+  query @LpPosition env.outsider >>= (=== [])
+  query @SwapReceipt env.outsider >>= (=== [])
+  allocationsOf env.outsider >>= (=== [])
+
+  -- providers see their own position, not each other's, and no trades
+  ps1 <- query @LpPosition env.lp1
+  map (.provider) (map snd ps1) === [env.lp1]
+  query @SwapReceipt env.lp1 >>= (=== [])
+  query @PoolState env.lp1 >>= (=== [])
+
+  -- the trader sees their receipt, not the positions behind it
+  query @LpPosition env.trader >>= (=== [])
+  receipts <- query @SwapReceipt env.trader
+  length receipts === 1
+
+  -- every allocation a provider can see only ever names the operator
+  forA_ [env.lp1, env.lp2] $ \lp -> do
+    allocs <- allocationsOf lp
+    forA_ allocs $ \(_, v) -> do
+      v.allocation.authorizer === basicAccount lp
+      forA_ v.allocation.transferLegSides $ \s -> s.otherside === basicAccount env.operator
+
+-- The long run
+---------------
+
+-- | Runs of swaps in both directions with uneven sizes, each from a fixed
+-- seed so it is the same every time. After every swap: the books match the
+-- allocations, nothing is created or destroyed, and x * y never shrinks.
+-- (Three short runs rather than one long one: the script service gives up
+-- on very long traces.)
+test_books_balance_run_1 : Script ()
+test_books_balance_run_1 = booksBalance 20261120
+
+test_books_balance_run_2 : Script ()
+test_books_balance_run_2 = booksBalance 424242
+
+test_books_balance_run_3 : Script ()
+test_books_balance_run_3 = booksBalance 7
+
+booksBalance : Int -> Script ()
+booksBalance seed = do
+  env <- twoProviders
+  _ <- deposit env env.lp3 "lp3" 300.0 600.0
+  supplyCc <- supply env.cc
+  supplyUsd <- supply env.usd
+  (_, p1) <- positionOf env env.lp1
+  (_, s0) <- poolState env
+  k0 <- poolProduct env
+  _ <- swapRun env 0 10 seed k0
+  supply env.cc >>= (=== supplyCc)
+  supply env.usd >>= (=== supplyUsd)
+  -- a provider's share of each side does not drift
+  (_, p1') <- positionOf env env.lp1
+  (_, s) <- poolState env
+  let drift : Decimal -> Decimal -> Bool
+      drift a b = abs (a - b) < 0.000001
+  assertMsg "share of A holds" (drift (p1'.amountA / s.reserveA) (p1.amountA / s0.reserveA))
+  assertMsg "share of B holds" (drift (p1'.amountB / s.reserveB) (p1.amountB / s0.reserveB))
+
+swapRun : Env -> Int -> Int -> Int -> Decimal -> Script Decimal
+swapRun env i n seed k
+  | i >= n = pure k
+  | otherwise = do
+      let next = (seed * 1103515245 + 12345) % 2147483648
+          sellCc = (next / 65536) % 2 == 0
+          size = intToDecimal (1 + next % 20000) / 100.0
+          (instrument, amount) = if sellCc then (env.cc, size / 2.0) else (env.usd, size)
+      _ <- swap env env.trader ("run-" <> show i) instrument amount
+      checkBooks env
+      k' <- poolProduct env
+      assertMsg ("x * y shrank at swap " <> show i) (k' >= k)
+      swapRun env (i + 1) n next k'

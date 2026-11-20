@@ -1,0 +1,17 @@
+sdk-version: 3.7.3
+name: orvane-dex-test
+source: daml
+version: 0.1.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+data-dependencies:
+  - ../orvane-dex/.daml/dist/orvane-dex-0.1.0.dar
+  - ../dars/splice-api-token-metadata-v1-1.0.0.dar
+  - ../dars/splice-api-token-holding-v2-1.0.0.dar
+  - ../dars/splice-api-token-allocation-v2-1.0.0.dar
+  - ../dars/splice-api-token-allocation-instruction-v2-1.0.0.dar
+  - ../dars/splice-test-token-v2-1.0.2.dar
+build-options:
+  - --target=2.3

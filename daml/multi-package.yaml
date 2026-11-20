@@ -8,3 +8,5 @@ packages:
   - ./orvane-credit
   - ./orvane-liquidity
   - ./orvane-amm-test
+  - ./orvane-dex
+  - ./orvane-dex-test

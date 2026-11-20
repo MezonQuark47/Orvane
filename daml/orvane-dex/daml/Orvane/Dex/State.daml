@@ -1,0 +1,91 @@
+-- Copyright (c) 2026 Orvane contributors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | What a pool remembers between transactions: its reserves, the providers'
+-- positions, and the private records left for traders and providers.
+module Orvane.Dex.State where
+
+import Splice.Api.Token.HoldingV2 qualified as H
+import Splice.Api.Token.AllocationV2 qualified as A
+
+data PoolStatus = Active | Paused
+  deriving (Eq, Show)
+
+-- | The pool's running totals. Recreated by every choice that moves funds.
+-- The reserves always equal the sum of the open positions, and an empty
+-- pool holds nothing.
+template PoolState
+  with
+    operator : Party
+    poolId : Text
+    reserveA : Decimal
+    reserveB : Decimal
+    positions : Int
+    status : PoolStatus
+    swaps : Int
+  where
+    signatory operator
+    ensure
+      (positions == 0 && reserveA == 0.0 && reserveB == 0.0)
+        || (positions > 0 && reserveA > 0.0 && reserveB > 0.0)
+
+-- | One provider's liquidity. The funds are not here: they sit in the two
+-- allocations, locked in the provider's own account until `termEnd`. This
+-- contract is the operator's note of what those allocations hold, and the
+-- provider can see it.
+template LpPosition
+  with
+    operator : Party
+    provider : Party
+    poolId : Text
+    positionId : Text
+    instrumentA : H.InstrumentId
+    allocationA : ContractId A.Allocation
+    amountA : Decimal
+    instrumentB : H.InstrumentId
+    allocationB : ContractId A.Allocation
+    amountB : Decimal
+    termEnd : Time
+    openedAt : Time
+  where
+    signatory operator
+    observer provider
+    ensure amountA > 0.0 && amountB > 0.0 && openedAt < termEnd
+
+-- | A trader's record of a filled swap. Only the trader and the operator
+-- see it.
+template SwapReceipt
+  with
+    operator : Party
+    trader : Party
+    poolId : Text
+    requestId : Text
+    instrumentIn : H.InstrumentId
+    amountIn : Decimal
+    instrumentOut : H.InstrumentId
+    amountOut : Decimal
+    settledAt : Time
+  where
+    signatory operator
+    observer trader
+
+data CloseReason = Withdrawn | TermEnded
+  deriving (Eq, Show)
+
+-- | A provider's record of a closed position: what went back to their
+-- account and why.
+template PositionClosed
+  with
+    operator : Party
+    provider : Party
+    poolId : Text
+    positionId : Text
+    instrumentA : H.InstrumentId
+    amountA : Decimal
+    instrumentB : H.InstrumentId
+    amountB : Decimal
+    reason : CloseReason
+    closedAt : Time
+  where
+    signatory operator
+    observer provider
