@@ -5,8 +5,8 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { ZERO, toNumber } from '../../../shared/decimal.ts'
 import { sameInstrument } from '../../../shared/dex.ts'
-import { useDex, type Incoming } from '../ledger/dex.tsx'
-import { answerIncoming } from '../ledger/orders.ts'
+import { useDex, type Allocation, type Incoming } from '../ledger/dex.tsx'
+import { answerIncoming, takeBack } from '../ledger/orders.ts'
 import { VaultStage } from '../three/stage.tsx'
 import { useActivity } from '../ui/activity.tsx'
 import { ConnectFirst, Panel, Rolling, SkeletonList, TokenGlyph, fmt, glyphFor, shortParty } from '../ui/bits.tsx'
@@ -96,6 +96,7 @@ export default function Portfolio() {
 
       <div className="rail">
         <IncomingPanel items={mine.incoming} />
+        <EndedPanel items={mine.allocations} />
 
         <Panel delay={0.25}>
           <header className="card-head">
@@ -182,6 +183,61 @@ function IncomingPanel({ items }: { items: Incoming[] }) {
           })}
         </AnimatePresence>
       </ul>
+    </Panel>
+  )
+}
+
+// Liquidity whose term is over. The operator releases it on its way out
+// while it is running; if it is not, the owner takes it back with their own
+// signature, and assets whose registry expires allocations come back alone.
+function EndedPanel({ items }: { items: Allocation[] }) {
+  const dex = useDex()
+  const activity = useActivity()
+  const [busy, setBusy] = useState<string>()
+  const now = Date.now()
+  const ended = items.filter((a) => a.committed && a.deadline && Date.parse(a.deadline) < now)
+  if (!ended.length) return null
+  const label = (id: string) => (id === 'Amulet' ? 'CC' : id)
+  return (
+    <Panel delay={0.2} className="incoming">
+      <header className="card-head">
+        <h3>Term over</h3>
+        <span className="badge">{ended.length} to take back</span>
+      </header>
+      <ul className="holding-list">
+        {ended.map((a) => {
+          const what = Object.entries(a.funding ?? {})
+            .map(([id, v]) => `${fmt(+v, 4)} ${label(id)}`)
+            .join(' + ')
+          return (
+            <li key={a.cid}>
+              <span className="mono strong">{what || 'allocation'}</span>
+              <span className="obs small">ended {dateTime(a.deadline!)}</span>
+              <span className="row-actions">
+                <button
+                  className="ghost small"
+                  disabled={!!busy}
+                  onClick={async () => {
+                    setBusy(a.cid)
+                    try {
+                      await activity.track(`Take back ${what}`, () => takeBack(dex, a.cid, a.admin), {
+                        detail: 'Only your signature is needed.',
+                        done: () => ({ detail: `${what} is free in your account.` }),
+                      })
+                    } catch {
+                      /* reported in Activity */
+                    }
+                    setBusy(undefined)
+                  }}
+                >
+                  {busy === a.cid ? '…' : 'Take back'}
+                </button>
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+      <p className="muted small">Your term ended. These funds are yours to unlock with your own signature, whether or not Orvane is running.</p>
     </Panel>
   )
 }

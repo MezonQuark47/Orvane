@@ -18,6 +18,14 @@ const net = await connect()
 net.log(`operator ${net.operator.split('::')[0]} on ${net.cfg.network} with ${net.pools.size} pool(s)`)
 serve(net, PORT)
 
+// ORVANE_SETTLE=off serves the API (and the LocalNet test-token registry)
+// without settling anything: how the network looks to users while the
+// operator's settlement is down.
+if (process.env.ORVANE_SETTLE === 'off') {
+  net.log('settlement is off; serving the API only')
+  await new Promise(() => {})
+}
+
 for (;;) {
   try {
     await settleOnce(net)

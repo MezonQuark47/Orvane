@@ -6,49 +6,15 @@
 // the only counterparty they ever name is the operator.
 
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, useState } from 'react'
 import { toNumber } from '../../../shared/decimal.ts'
-import { ALLOCATION_V2 } from '../../../shared/dex.ts'
 import { useDex } from '../ledger/dex.tsx'
 import { ConnectFirst, EyeIcon, fmt, fmtCompact, shortParty } from '../ui/bits.tsx'
 
 type Row = { key: string; kind: string; title: string; detail: string }
 
-interface AllocationView {
-  settlement: { id: string; executors: string[] }
-  allocation: { committed: boolean; transferLegSides: Array<{ otherside: { owner: string | null } }>; nextIterationFunding: Record<string, string> | null; settlementDeadline: string | null }
-  numIterations: string
-}
-
-function useAllocations() {
-  const { wallet, party } = useDex()
-  const session = wallet.phase === 'connected' ? wallet.session : undefined
-  const [rows, setRows] = useState<Array<{ cid: string; view: AllocationView }>>([])
-  useEffect(() => {
-    if (!session || !party) return
-    let alive = true
-    let timer: ReturnType<typeof setTimeout>
-    const tick = async () => {
-      try {
-        const xs = await session.ledger.queryInterface<AllocationView>(party, ALLOCATION_V2)
-        if (alive) setRows(xs.map((x) => ({ cid: x.contractId, view: x.view })))
-      } catch {
-        /* keep the last read */
-      }
-      if (alive) timer = setTimeout(tick, 2500)
-    }
-    tick()
-    return () => {
-      alive = false
-      clearTimeout(timer)
-    }
-  }, [session, party])
-  return rows
-}
-
 export default function Privacy() {
   const { config, pools, party, mine, instrument } = useDex()
-  const allocations = useAllocations()
+  const allocations = mine.allocations
   const pool = config?.pools[0]
   const live = pool ? pools.get(pool.poolId) : undefined
 
@@ -68,12 +34,12 @@ export default function Privacy() {
     ...allocations.map((a) => ({
       key: a.cid,
       kind: 'Allocation',
-      title: a.view.allocation.nextIterationFunding
-        ? Object.entries(a.view.allocation.nextIterationFunding)
+      title: a.funding
+        ? Object.entries(a.funding)
             .map(([id, v]) => `${fmt(+v, 2)} ${id === 'Amulet' ? 'CC' : id}`)
             .join(' + ')
-        : `${a.view.allocation.transferLegSides.length} leg(s)`,
-      detail: `${a.view.allocation.committed ? 'committed' : 'one-shot'} · ${a.view.numIterations} settlements`,
+        : `${a.counterparties.length} leg(s)`,
+      detail: `${a.committed ? 'committed' : 'one-shot'} · ${a.settlements} settlements`,
     })),
     ...mine.holdings.map((h) => ({
       key: h.cid,
@@ -84,8 +50,8 @@ export default function Privacy() {
   ]
 
   // every counterparty named in any of your allocations
-  const counterparties = new Set(allocations.flatMap((a) => a.view.allocation.transferLegSides.map((s) => s.otherside.owner ?? 'registry')))
-  const executors = new Set(allocations.flatMap((a) => a.view.settlement.executors))
+  const counterparties = new Set(allocations.flatMap((a) => a.counterparties.map((p) => p ?? 'registry')))
+  const executors = new Set(allocations.flatMap((a) => a.executors))
 
   return (
     <div className="page page-lens">

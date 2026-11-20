@@ -1,300 +1,177 @@
 # Orvane
 
-Private payments and DeFi on the Canton Network, written in Daml.
+A private exchange on the Canton Network, where liquidity never leaves your wallet.
 
-Orvane is an open-source settlement layer for businesses that want to trade, pay and borrow
-on-ledger without exposing who paid whom or how much they hold.
+Orvane is a constant-product DEX built on the Canton Network Token Standard V2 (CIP-0112) and
+written in Daml. It does two things, and tries to do them better than anyone else on Canton:
 
-Status: prototype on a local Canton sandbox. Three modules share one liquidity pool:
+- **Private swaps.** You sell an exact amount for at least the minimum you set, in one atomic
+  transaction. Only you and the operator can see the trade. The providers on the other side never
+  learn who you are, and you never learn who they are.
+- **Self-custodial liquidity.** Providers never hand their funds to a pool. Their deposit stays in
+  their own account, locked for a term they choose, and every swap settles a slice of it. They can
+  withdraw whenever they like. When the term ends, the funds unlock without anyone's help, even if
+  Orvane is gone.
 
-- **Private AMM**: swaps and liquidity where nobody but the trader and operator sees a trade.
-- **Private payments**: payroll and B2B invoices. Employees see only their own payslip, the
-  auditor sees totals only, and anyone can pay or be paid in the currency they prefer, with the
-  conversion settled atomically through the pool.
-- **Private lending**: collateralized USDx loans against CCx, priced and liquidated through the
-  pool, plus earned-wage advances that are repaid automatically out of the next payroll.
+Status: working end to end on Canton LocalNet (Splice 0.10.2), with real Canton Coin and Splice's
+official V2 test token, through the official Wallet Gateway. Not audited. Read
+[SECURITY.md](SECURITY.md) for the trust model.
 
-Next: DevNet deployment with the Loop wallet. See the roadmap below.
+## Why this design
 
-## Why Canton
+| | Typical Canton AMM | Orvane |
+|---|---|---|
+| Where LP funds sit | In the operator's or the pool's custody | In the LP's own account, locked by the token standard |
+| If the operator disappears | LPs depend on it to get funds back | Funds unlock on their own at the end of the term |
+| Who sees a trade | Trader, operator, and often the counterparties | Trader and operator only: every leg runs through the operator |
+| How LPs are paid | An LP token to redeem later | Their own allocation grows with the fees, on every swap |
+| Asset support | Often one integration per token | Any CIP-0112 asset; Canton Coin and the test token run the same code |
 
-On most public chains every swap and every payment is visible to everyone. Canton has
-sub-transaction privacy: a party only sees the parts of a transaction it is a stakeholder in.
-Orvane relies on this:
+## How it works
 
-| Party | Can see |
-|---|---|
-| Pool members | Pool reserves (i.e. the price), nothing else |
-| Trader | Their own request, tokens and receipt |
-| Operator | The requests it has to settle |
-| Other traders | Neither who traded nor what anyone holds |
+### Liquidity
 
-A trade settles in a single Canton transaction (input in, pool update, output out, receipt),
-so it either fully happens or doesn't happen at all.
-
-## How a swap works
-
-```
-Trader   --signs-->    SwapRequest            (visible to trader + operator)
-Operator --executes--> SwapRequest_Execute    (one atomic transaction)
-    1. Token.Transfer  trader -> operator     (authorized by the trader's request)
-    2. Pool_Swap       x*y=k, 0.30% fee, slippage check, no trader identity
-    3. Token.Transfer  operator -> trader
-    4. SwapReceipt     visible to trader + operator only
-```
-
-Wallets only ever sign one command per action: `SwapOrder_Place` / `LiquidityOrder_Place` merge
-the user's holdings, carve out the exact amount, disclose it to the operator and file the request
-in a single transaction.
-
-## How payments work
-
-**Payroll.** The employer signs one `PayrollOrder_Run`. In that transaction every employee paid
-in the payroll currency gets their funds and a `Payslip` that only they (and the employer) can
-read, and the auditor gets a `PayrollAttestation` with period, headcount and total. Employees
-who asked to be paid in another currency (`PayoutPreference`) get a `PayoutRequest` that the
-operator settles through the pool. The operator only ever sees those lines. If the conversion
-can't be filled within the employer's slippage limit, the employee is paid in the original
-currency instead, so nobody goes unpaid.
-
-**Invoices.** A supplier's `Invoice` is visible to the supplier and buyer only. Paying in the
-invoice currency settles directly between the two of them. Paying in another currency creates an
-`InvoiceSettlement`; the operator swaps exactly enough to cover the invoice, the supplier
-receives the exact invoiced amount, and unused input goes back to the buyer. Buyers can dispute,
-suppliers can reissue.
-
-| Party | Can see |
-|---|---|
-| Employee | Their own payslips and payout preference |
-| Auditor | Payroll totals (period, headcount, sum), no names or amounts |
-| Operator | Only payroll lines and invoices that need a currency conversion |
-| Supplier / buyer | Their shared invoices and payment proofs |
-
-## How lending works
-
-**Market.** Lenders supply USDx and receive shares whose value grows as borrowers pay interest.
-The borrow rate follows utilization (2% base + 18% × utilization). Members see the market's
-totals; market choices never carry a lender's or borrower's identity.
-
-**Loans.** A borrower locks CCx and borrows up to 60% of its value, priced from the AMM pool.
-The loan is visible to the borrower and the operator only. Repaying is a single signature that
-returns the collateral in the same transaction. If debt crosses 80% of the collateral's value,
-the operator's keeper liquidates: the collateral is sold through the pool and the market is
-repaid in one atomic transaction. Any shortfall is recorded as bad debt, never hidden.
-
-**Earned-wage advances.** The employer opens an `AdvanceLine` per employee. The employee draws an
-advance from the lending market (1% fee). At the next payroll, `PayrollWithAdvances` repays every
-open advance and pays everyone their net amount, all under the employer's one signature.
-Colleagues and lenders never see who took an advance.
-
-The demo market runs on a compressed clock (one year of interest per hour, set by
-`yearSeconds`) so interest is visible while you watch.
-
-## Real Canton Coin: token-standard exchange
-
-On LocalNet, Trade runs against a USDx / **Canton Coin** pool that settles exclusively through the
-Canton Network Token Standard (CIP-56). The exchange contract never touches a token
-implementation; it only sees `Allocation`s, so Canton Coin (Amulet, registry served by Scan) and
-Orvane USDx (our own registry) are handled by the same code.
+A provider signs one transaction at the pool's `OrderDesk`. It creates two **committed, iterated
+V2 allocations** in the provider's own account, one per asset, with the operator as executor and the
+term end as deadline. The operator opens a position on them (`PoolRules_AddLiquidity`) after checking
+the amounts, the term and that the deposit matches the pool price.
 
 ```
-Trader   --one signature-->  ExchangeSwapOrder_Place
-                              ├─ AllocationFactory_Allocate   (CC locked: trader -> operator, executor operator)
-                              └─ ExchangeSwapRequest          (visible to trader + operator)
-Operator --allocates-->       output from the pool's reserves (operator -> trader)
-Operator --settles-->         ExchangeSwapRequest_Settle, one atomic transaction:
-                              ├─ ExchangePool_Swap            (x*y=k accounting, can't pay above the quote)
-                              ├─ Allocation_ExecuteTransfer   (input leg)
-                              └─ Allocation_ExecuteTransfer   (output leg)
+Provider --one signature--> OrderDesk_Deposit
+                             ├─ AllocationFactory_Allocate   asset A, committed, locked until term end
+                             ├─ AllocationFactory_Allocate   asset B, committed, locked until term end
+                             └─ DepositRequest               (provider + operator)
+Operator --opens-->          PoolRules_AddLiquidity          LpPosition (provider + operator), reserves += A, B
 ```
 
-Choice contexts and disclosed contracts (AmuletRules, open mining round) come from the registry's
-off-ledger API and are passed through untouched. If a trade can't be filled, the operator cancels
-the trader's allocation and the funds are released.
+Committed means the provider can't pull the funds out from under a swap mid-term. They can still
+leave at any time through the operator (`WithdrawRequest`), and at the deadline the token standard
+lets them withdraw on their own. Canton Coin also expires the allocation at its deadline, so it
+unlocks with no action at all. Renewing a position re-locks the same amounts for a new term in one
+transaction.
 
-### Payroll on the token standard
+### Swaps
+
+A trader signs one transaction at the `OrderDesk`: it locks exactly the input in an allocation whose
+only leg is trader → operator, and files a `SwapRequest`. The operator fills it in one transaction:
 
 ```
-Employee --signs once-->  PayeeConsent              (employer may pay me; operator may convert my pay)
-Employer --one signature-> PayrollOrderCn_Lock       (every line becomes an allocation; each employee sees only theirs)
-Employer --payday-->       PayrollBatch_Release      (all allocations execute atomically under the consents)
-                           ├─ PayslipCn              (signed by employer + employee, nobody else)
-                           ├─ PayrollAttestationCn   (auditor: period, headcount, total)
-                           └─ ConvertTicket          (only for employees who want Canton Coin)
-Operator                   ConvertTicket_Swap        (swaps the pay through the exchange with the employee's authority)
+Operator --PoolRules_Swap--> checks every position (in term, allocations match the books)
+                             prices with x*y=k and a 0.30% fee, refuses anything below the trader's minimum
+                             SwapRequest_Fill            the trader's receipt allocation, for exactly the output
+asset A batch:  SettleBatch  trader → operator → each LP, pro rata to what they hold of A
+asset B batch:  SettleBatch  each LP → operator → trader, pro rata to what they hold of B
+                             every LP allocation rolls into its next iteration with its new amount
+                             SwapReceipt (trader + operator), PoolState updated
 ```
 
-The operator never sees a payroll line unless that employee asked for a conversion, and it can't
-sell more than the pay that was just received.
+The operator stands in the middle of every leg with an allocation that nets to zero, so no trader
+ever appears in an LP's allocation and no LP in a trader's. If the price moved past the trader's
+minimum, the swap is handed back and the input unlocked in the same transaction.
 
-### Invoices and wage advances on the token standard
+Wallets of external parties can only sign transactions with a single root action, which is why
+orders are one choice on the operator's `OrderDesk` contract, handed to the wallet as a disclosed
+contract. The desk's choices still need the user's own signature.
 
-- **Invoices** (`Orvane.Billing`): visible to supplier and buyer only. Paying in the invoice currency
-  locks an allocation from buyer to supplier and settles it; nobody else is involved. Paying in
-  another asset locks it to the operator, who allocates exactly the invoiced amount from the
-  exchange pool to the supplier and settles both legs atomically. Disputes and reissues included.
-- **Wage advances** (`Orvane.Advances`): the employer backs a line per employee; the operator pays
-  the advance out of the credit market as an allocation. On payday the employer repays principal
-  and fee **in the same transaction that releases payroll**, and the employee is paid the net.
+### Who sees what
 
-### Credit on the token standard
+| | You | Other traders | Other LPs | Operator | Public |
+|---|---|---|---|---|---|
+| That you traded, and how much | yes | no | no | yes | no |
+| Your liquidity position | yes | no | no | yes | no |
+| Who was on the other side | no | no | no | yes | no |
+| Pool reserves and recent prices | yes | yes | yes | yes | yes |
 
-Every movement of funds is an allocation, settled as one atomic DvP by the operator:
-
-| Action | Legs (one transaction) |
-|---|---|
-| Supply | USDx lender → operator; position minted |
-| Borrow | CC borrower → operator **and** USDx operator → borrower; loan created |
-| Repay | USDx borrower → operator **and** CC operator → borrower; loan closed |
-| Withdraw | USDx operator → lender; position burned |
-| Liquidate | on-ledger only: the loan's CC is sold into the exchange pool and the market repaid; any surplus is paid back to the borrower |
-
-Collateral is priced by the exchange pool. Loans and positions are visible to their owner and the
-operator only; market choices never name a party.
+As with any token, an asset's registry also sees transfers of its own asset. The **Privacy** tab
+shows it live: what your node holds next to what everyone else can learn, and a check from your own
+allocations that the only counterparty they name is the operator.
 
 ## Repository layout
 
-| Path | What it is |
+| Path | What |
 |---|---|
-| `daml/orvane-amm` | On-ledger contracts: `Token`, `Pool`, `LpShare`, `SwapOrder`, `SwapRequest`, `LiquidityOrder`, `AddLiquidityRequest`, `RemoveLiquidityRequest`, `SwapReceipt` |
-| `daml/orvane-payments` | Payroll (`PayrollOrder`, `Payslip`, `PayrollAttestation`, `PayoutPreference`, `PayoutRequest`) and invoices (`Invoice`, `InvoiceSettlement`, `PaidInvoice`, `DisputedInvoice`). Depends on `orvane-amm` |
-| `daml/orvane-lending` | Lending market (`LendingMarket`, `SupplyPosition`, `Loan`, borrow/supply orders) and wage advances (`AdvanceLine`, `Advance`, `PayrollWithAdvances`). Depends on both packages above |
-| `daml/orvane-registry` | CIP-56 token registry for Orvane test instruments (USDx): `OrvaneHolding`, `OrvaneRules` (TransferFactory, AllocationFactory), `OrvaneAllocation`. Built on the official Splice token standard interfaces vendored in `daml/dars` |
-| `daml/orvane-exchange` | Token-standard exchange: `ExchangePool`, `ExchangeSwapOrder` (allocate input + file request in one signature), `ExchangeSwapRequest` (atomic DvP settlement), `ExchangeReceipt` |
-| `daml/orvane-treasury` | Token-standard payroll and invoices (`Orvane.Billing`): `PayeeConsent` (employee-signed delegation), `PayrollOrderCn` (lock every line as an allocation), `PayrollBatch` (atomic release), `PayslipCn`, `PayrollAttestationCn`, `ConvertTicket` (convert pay through the exchange) |
-| `daml/orvane-credit` | Token-standard credit and wage advances (`Orvane.Advances`): `CreditMarket`, supply / borrow / repay orders and requests (each one DvP), `CreditLoan` with on-ledger liquidation into the exchange pool, `CreditSurplus` |
-| `daml/orvane-liquidity` | Liquidity for the token-standard pool: `LpDepositOrder` (both sides allocated in one signature), `LpDepositRequest` and `LpWithdrawRequest` (atomic settlement against the pool), `LpShare` (owner and operator only), `LpBook` (total shares, visible to members like the reserves) |
-| `daml/orvane-amm-test` | Daml Script tests, kept in a separate package so test code is never uploaded to a validator |
-| `shared/` | TypeScript JSON Ledger API v2 client (with LocalNet dev JWT), contract types, command builders, pricing math, Scan / token-standard registry client (`amulet.ts`) and registry abstraction (`exchange.ts`). Used by both the operator and the web app |
-| `operator/` | Node service that uploads the contracts, bootstraps a demo world and settles requests (no dependencies, Node 22.18+) |
-| `frontend/` | React web app: React Three Fiber scene, Motion, Radix UI, Five North Loop SDK |
+| `daml/orvane/` | The contracts: `Orvane.Dex.Pool` (rules, swap, liquidity), `Orders` (desk and requests), `State`, `Token` (V2 helpers), `Math` |
+| `daml/orvane-test/` | Daml Script tests against Splice's official V2 test token |
+| `daml/dars/` | Official token-standard V2 API packages and the V2 test token, from the Splice 0.10.2 bundle |
+| `config/pairs.localnet.json` | Network and pools: pairs, fee, terms, limits |
+| `operator/` | The executor: sets up pools, settles requests, serves the public API and the registry proxy |
+| `shared/` | Ledger client, exact Daml-decimal math, DEX commands, V2 registry clients (Scan and the test token) |
+| `frontend/` | React app: CIP-0103 wallets (Wallet Gateway, Loop), Swap, Liquidity, Portfolio, Privacy |
+| `scripts/` | LocalNet, Wallet Gateway, test funds, the end-to-end check |
 
-Design notes:
+## Running it on LocalNet
 
-- Every user action is a propose/accept: the user signs a request and the operator settles it.
-  Users never need to see each other's contracts.
-- Disclosing a token to the operator lets the operator see it, not move it. Moving it still
-  requires the owner's signed request (covered by a test).
-- Pool choices don't include the trader, so members watching the pool learn the price but not
-  the counterparty.
-- If a liquidity deposit doesn't match the pool ratio, the excess is refunded.
+You need Docker Desktop (about 11 GB of memory), Node 22.18+, and [dpm](https://docs.digitalasset.com)
+with Daml SDK 3.7.3. Download the Splice node bundle
+([releases](https://github.com/digital-asset/decentralized-canton-sync/releases), 0.10.2) and set
+`ORVANE_SPLICE_DIR` to its `splice-node` folder.
 
-## Running the app locally
-
-You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com), Java 17 or newer and Node 22.18 or newer.
-Use three terminals. Two ledgers are supported: the lightweight `dpm sandbox`, or the full Splice
-LocalNet (a local Canton Network with Canton Coin, wallets and Scan; needs Docker and ~10 GB RAM).
-
-**Option A: sandbox (fast, ~2 GB RAM)**
-
-```bash
-# 1. Canton sandbox with the contracts loaded (JSON Ledger API on :6864)
-./scripts/sandbox.ps1
-
-# 2. Operator: uploads contracts, creates parties and the demo world, settles requests (:7600)
-cd operator && npm start
-
-# 3. Web app (http://localhost:5173)
-cd frontend && npm install && npm run dev
-```
-
-**Option B: Splice LocalNet (full Canton Network)**
-
-Download and unpack the Splice node bundle matching DevNet
-([releases](https://github.com/digital-asset/decentralized-canton-sync/releases), currently 0.10.2)
-and set `ORVANE_SPLICE_DIR` to its `splice-node` folder. Then:
-
-```bash
-# 1. Start LocalNet (first run pulls images; give Docker ~11 GB of memory)
+```powershell
+# 1. LocalNet and the Wallet Gateway (http://localhost:3030)
 ./scripts/localnet.ps1 up
+./scripts/wallet-gateway.ps1 up
 
-# 2. Build the contracts, then run the operator against the app-provider participant (:3975)
-cd daml && dpm build --all && cd ..
-cd operator && npm run start:localnet
+# 2. Contracts
+cd daml; dpm build --all; cd ..
 
-# 3. Web app; the dev proxy signs LocalNet's development JWT, so no secret reaches the browser
-cd frontend && npm run dev:localnet
+# 3. Operator: uploads the packages, opens the pools from config/, settles (http://localhost:7600)
+node operator/index.ts
+
+# 4. Web app (http://localhost:5173)
+cd frontend; npm install; npm run dev
 ```
 
-On the sandbox, the token-standard flows (exchange, payroll, invoices, advances, credit) use a CIP-56 stand-in "CC"
-issued by the Orvane registry instead of Canton Coin, so everything can be developed and tested
-without Docker. LocalNet runs the same contracts against real Canton Coin.
+Then, once per wallet:
 
-`./scripts/localnet.ps1 stop` pauses LocalNet and keeps its data; `up` resumes it. When a package gains
-new modules, bump its version (e.g. `orvane-treasury` and `orvane-credit` are at 0.2.0): Canton's
-smart contract upgrade then accepts it next to the old version and existing contracts keep working.
-
-LocalNet uses the `unsafe` HS256 development secret that ships with Splice. It is for local
-development only. Wallet UIs: http://wallet.localhost:3000 (app provider), Scan: http://scan.localhost:4000.
-`./scripts/localnet.ps1 down` stops it and deletes its data.
-
-In the app, use "Act as" to switch between Alice (liquidity provider), Bob (trader), Carol
-(pool member), Acme (employer and buyer), Nova (supplier) and the Auditor. The Privacy lens tab
-shows, live, which contracts each of them can see.
-The sandbox is in-memory, so restarting it resets the demo. On LocalNet the operator recognises an
-existing demo world and does not seed it twice.
-
-## Running the tests
-
-You need [dpm / Daml SDK 3.7.3](https://docs.digitalasset.com) and Java 17 or newer.
-
-```bash
-# Windows
-./scripts/test.ps1
-
-# macOS / Linux
-./scripts/test.sh
+```powershell
+# a ledger user for the wallet to sign in as (Client ID; Client Secret on LocalNet is "unsafe")
+./scripts/wallet-gateway.ps1 user my-wallet
 ```
 
-All 73 scripts should pass.
+Connect in the app with **Connect wallet → Wallet Gateway** and sign in with that Client ID. Test funds
+arrive as token-standard transfer offers, which you accept under **Portfolio → Incoming**:
 
-| Test | Checks |
-|---|---|
-| `test_math` | sqrt, pricing and deposit ratio |
-| `test_addLiquidity` | first and later deposits, excess refund |
-| `test_swap` | output amount, k never decreases, another member can't see the trade |
-| `test_slippageProtection` | trade is rejected and the trader keeps their funds |
-| `test_foreignTokenRejected` | a same-named token from another issuer is rejected |
-| `test_operatorCannotStealWithoutRequest` | the operator can't move disclosed funds |
-| `test_removeLiquidity` | LP withdraws reserves plus earned fees |
-| `test_swapOrderSingleSignature` | one signature merges holdings, swaps the exact amount, change stays private |
-| `test_swapOrderInsufficientBalance` | ordering more than you hold fails |
-| `test_liquidityOrder` | one-signature deposit mints an LP share |
-| `test_payrollSameCurrency` | one signature pays three people; each sees only their payslip, the auditor only the total |
-| `test_payrollConversion` | a CCx line goes through the pool; the operator never sees the other lines |
-| `test_payrollConversionFallback` | a failed conversion still pays the employee, in USDx |
-| `test_payrollInsufficientFunds` | payroll larger than the balance is rejected |
-| `test_invoicePaidDirect` | same-currency payment; operator and outsiders never see the invoice |
-| `test_invoicePaidConverted` | buyer pays in CCx, supplier gets exactly the USDx invoiced, refund is private again |
-| `test_invoiceConversionSlippage` | too-low maximum: invoice reopens, buyer keeps funds |
-| `test_invoiceDisputeAndReissue` | dispute and corrected reissue |
-| `test_supplyAndBorrowPrivately` | borrow within LTV; members see totals, the lender never sees the borrower |
-| `test_borrowAboveLimitRejected` | borrowing past 60% LTV fails |
-| `test_repayWithInterestAndLenderEarns` | a year of interest, collateral returned, lender withdraws principal + interest |
-| `test_healthyLoanCannotBeLiquidated` | the operator cannot liquidate a safe loan |
-| `test_liquidationThroughThePool` | price crash, collateral sold through the AMM, bad debt recorded |
-| `test_addCollateral` | topping up collateral |
-| `test_advanceRepaidFromPayroll` | advance drawn, then repaid out of payroll under one signature |
-| `test_advanceLimits` | above-limit and second open advance are rejected |
-| `test_mintExposesHoldingView` … `test_settlementDeadline` | registry conformance: Holding view, transfers, DvP with two allocations settled atomically, executor cannot settle alone, withdraw, deadlines |
-| `test_swapSettlesAtomically` … `test_orderMustPayTheOperator` | exchange: atomic two-leg settlement, no overpaying from reserves, slippage reject releases funds, mismatched allocations and orders rejected, outsiders see nothing |
-| `test_payrollLockAndRelease` … `test_cancelReturnsFunds` | token-standard payroll: lock and atomic release, per-employee privacy, auditor totals only, conversion through the exchange, operator cannot sell more than the pay, wrong consents rejected, cancel returns funds |
-| `test_borrowIsAtomicAndPrivate` … `test_liquidationSellsCollateralIntoThePool` | token-standard credit: atomic borrow, LTV limit, repay returns collateral and lender earns, underpayment rejected and refunded, healthy loans safe, liquidation through the pool with bad debt recorded |
-| `test_invoicePaidDirectly` … `test_disputeAndReissue` | token-standard invoices: direct payment invisible to others, cancel before settling, paying in CC while the supplier gets exact USDx, too-small conversion reopens the invoice, dispute and reissue |
-| `test_advanceDrawnAndRepaidByEmployer` … `test_repaymentMustCoverFee` | wage advances: drawn from the credit market, repaid by the employer with fee, limits, one open advance, repayment must cover the fee |
-| `test_depositMintsAProportionalShare` … `test_depositMustMatchThePair` | token-standard liquidity: proportional shares, members see the deeper pool but not who, withdrawal pays the share of both reserves plus fees, no overpaying, rejected deposits return both sides, deposits must pay the operator and match the pair |
+```powershell
+./scripts/fund-localnet.ps1 -Party <your party id> -Usd 100 -Cc 20000
+```
+
+`./scripts/localnet.ps1 stop` pauses LocalNet and keeps its data; `up` resumes it.
+
+## Tests
+
+```powershell
+./scripts/test.ps1              # Daml: builds everything and runs the Daml Script suite
+node scripts/e2e-localnet.ts    # LocalNet, with the operator running
+```
+
+The Daml suite runs against real V2 allocations of Splice's test token: deposits and their limits,
+swaps both ways, trader protection (minimum, stale quotes, exact legs enforced by the registry,
+nobody ordering for someone else), withdrawals, renewals, term ends with and without the operator,
+pausing, privacy, and the books balancing over seeded runs of swaps (`x*y` never shrinks, supply is
+conserved, every position's share holds).
+
+The end-to-end check puts providers and a trader on a different participant from the operator,
+as real wallets are. It funds them through transfer offers, deposits, swaps both ways, withdraws,
+renews, and checks rejections, the books and privacy after each step, with real Canton Coin.
+
+On a Turkish (or other dotted-i) system locale the Daml tools need an English JVM locale; the test
+script sets `JAVA_TOOL_OPTIONS=-Duser.language=en -Duser.country=US`.
 
 ## Roadmap
 
-1. Private AMM: swap, liquidity, LP shares (done)
-2. Web app: React with [Loop SDK](https://docs.fivenorth.io/loop-sdk/overview/) wallet connection (done, local sandbox)
-3. Operator service that settles requests through the Ledger API (done, local sandbox)
-4. LocalNet deployment (done), CIP-56 registry for USDx (done), USDx / Canton Coin exchange settling
-   through token-standard allocations (done), payroll on allocations with real CC conversion (done),
-   credit with real CC collateral (done), invoices and wage advances on allocations (done), liquidity
-   for the token-standard pool (done on the sandbox, LocalNet pass pending); next: DevNet
-5. Payments: private payroll and B2B invoices settled through the pool (done, local sandbox)
-6. Lending: collateralized loans with pool-priced liquidation and earned-wage advances (done, local sandbox)
+1. Contracts on Token Standard V2 with self-custodial liquidity (done)
+2. Operator with exact settlement, rejections that release funds, and term handling (done)
+3. Web app with CIP-0103 wallets; tested with the Wallet Gateway on LocalNet (done)
+4. DevNet: real V2 pairs, and the [Loop](https://docs.fivenorth.io/loop-sdk/overview/) wallet once
+   Five North has reviewed the package
+5. Remove the remaining operator trust: a second executor that co-signs every settlement, or
+   settlement only through the pool contract (see [SECURITY.md](SECURITY.md))
+
+## Acknowledgements
+
+The token-standard API packages and the V2 test token in `daml/dars/` are from
+[Splice](https://github.com/hyperledger-labs/splice) (Apache-2.0), as published in its 0.10.2
+release bundle.
 
 ## License
 

@@ -5,6 +5,7 @@
 
 import { show, type Dec } from '../../../shared/decimal.ts'
 import {
+  ALLOCATION_V2,
   TRANSFER_INSTRUCTION_V2,
   allocateArgs,
   basicAccount,
@@ -196,4 +197,25 @@ export async function answerIncoming(dex: DexState, instructionId: string, admin
     dedupeDisclosed(ctx.disclosed),
   )
   await waitFor(() => (dex.latest().incoming.some((i) => i.cid === instructionId) ? undefined : true), 45_000)
+}
+
+// Take back funds whose term is over. A committed allocation can be
+// withdrawn by its owner once its deadline has passed, with the owner's
+// signature alone: no operator, no counterparty.
+export async function takeBack(dex: DexState, allocationId: string, admin: string) {
+  const ctx = await dex.registry(admin).allocationChoice(allocationId, 'withdraw')
+  await dex.submit(
+    [
+      {
+        ExerciseCommand: {
+          templateId: ALLOCATION_V2,
+          contractId: allocationId,
+          choice: 'Allocation_Withdraw',
+          choiceArgument: { actors: [dex.party!], extraArgs: ctx.extraArgs },
+        },
+      },
+    ],
+    dedupeDisclosed(ctx.disclosed),
+  )
+  await waitFor(() => (dex.latest().allocations.some((a) => a.cid === allocationId) ? undefined : true), 45_000)
 }

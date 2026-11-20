@@ -9,6 +9,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { Contract } from '../../../shared/ledger.ts'
 import { dec, ZERO, type Dec } from '../../../shared/decimal.ts'
 import {
+  ALLOCATION_V2,
   DEX,
   HOLDING_V2,
   TRANSFER_INSTRUCTION_V2,
@@ -77,6 +78,20 @@ export interface Incoming {
   executeBefore: string
 }
 
+// One of the user's token-standard allocations: funds locked in their own
+// account for a settlement.
+export interface Allocation {
+  cid: string
+  admin: string
+  settlementId: string
+  executors: string[]
+  committed: boolean
+  deadline?: string
+  funding: Record<string, string> | null
+  counterparties: Array<string | null>
+  settlements: number
+}
+
 export interface Mine {
   holdings: Holding[]
   positions: Contract<LpPosition>[]
@@ -88,9 +103,10 @@ export interface Mine {
   rejections: Contract<RequestRejected>[]
   closed: Contract<PositionClosed>[]
   incoming: Incoming[]
+  allocations: Allocation[]
 }
 
-const EMPTY: Mine = { holdings: [], positions: [], receipts: [], swaps: [], deposits: [], withdrawals: [], renewals: [], rejections: [], closed: [], incoming: [] }
+const EMPTY: Mine = { holdings: [], positions: [], receipts: [], swaps: [], deposits: [], withdrawals: [], renewals: [], rejections: [], closed: [], incoming: [], allocations: [] }
 
 export type WalletState = { phase: 'idle' } | { phase: 'connecting'; kind: WalletKind } | { phase: 'connected'; session: WalletSession } | { phase: 'error'; message: string }
 
@@ -142,6 +158,18 @@ interface HoldingWire {
   instrumentId: InstrumentId
   amount: string
   lock: unknown
+}
+
+interface AllocationWire {
+  settlement: { id: string; executors: string[] }
+  allocation: {
+    admin: string
+    committed: boolean
+    settlementDeadline: string | null
+    nextIterationFunding: Record<string, string> | null
+    transferLegSides: Array<{ otherside: { owner: string | null } }>
+  }
+  numIterations: string
 }
 
 interface InstructionWire {
@@ -249,7 +277,7 @@ export function DexProvider({ children }: { children: ReactNode }) {
   const read = useCallback(async (): Promise<Mine | undefined> => {
     if (!session) return undefined
     const { ledger, party } = session
-    const [rows, holdings, instructions] = await Promise.all([
+    const [rows, holdings, instructions, allocations] = await Promise.all([
       ledger.query<unknown>(party, [
         DEX.LpPosition,
         DEX.SwapReceipt,
@@ -262,6 +290,7 @@ export function DexProvider({ children }: { children: ReactNode }) {
       ]),
       ledger.queryInterface<HoldingWire>(party, HOLDING_V2),
       ledger.queryInterface<InstructionWire>(party, TRANSFER_INSTRUCTION_V2),
+      ledger.queryInterface<AllocationWire>(party, ALLOCATION_V2),
     ])
     const of = <T,>(entity: string) => rows.filter((c) => c.templateId.endsWith(`:${entity}`)) as Contract<T>[]
     const newest = <T,>(xs: Contract<T>[]) => [...xs].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
@@ -286,6 +315,17 @@ export function DexProvider({ children }: { children: ReactNode }) {
           sender: i.view.transfer.sender.owner,
           executeBefore: i.view.transfer.executeBefore,
         })),
+      allocations: allocations.map((a) => ({
+        cid: a.contractId,
+        admin: a.view.allocation.admin,
+        settlementId: a.view.settlement.id,
+        executors: a.view.settlement.executors,
+        committed: a.view.allocation.committed,
+        deadline: a.view.allocation.settlementDeadline ?? undefined,
+        funding: a.view.allocation.nextIterationFunding,
+        counterparties: a.view.allocation.transferLegSides.map((s) => s.otherside.owner),
+        settlements: Number(a.view.numIterations),
+      })),
     }
   }, [session])
 
