@@ -59,6 +59,8 @@ const cc = net.instruments.CC
 const usd = net.instruments.TestUSD
 const operator = net.operator
 const settlement = poolSettlement(operator, POOL)
+// orders go through the pool's desk, handed to wallets as a disclosed contract
+const desk = net.pools.get(POOL)!.desk
 
 interface Holding {
   account: { owner: string | null }
@@ -155,9 +157,9 @@ async function deposit(lp: string, amountA: Dec, amountB: Dec, termMinutes: numb
   ])
   await wallet.submit(
     [lp],
-    [placeDeposit({ provider: lp, operator, poolId: POOL, requestId, instrumentA: cc, amountA, instrumentB: usd, amountB, termEnd, factoryA: fa, holdingsA: holdA, factoryB: fb, holdingsB: holdB, requestedAt })] as never,
+    [placeDeposit({ desk: desk.contractId, provider: lp, requestId, instrumentA: cc, amountA, instrumentB: usd, amountB, termEnd, factoryA: fa, holdingsA: holdA, factoryB: fb, holdingsB: holdB, requestedAt })] as never,
     [],
-    dedupeDisclosed([...fa.disclosed, ...fb.disclosed]),
+    dedupeDisclosed([desk, ...fa.disclosed, ...fb.disclosed]),
   )
   return until('the position to open', async () => (await books()).positions.find((p) => p.payload.positionId === requestId))
 }
@@ -192,9 +194,9 @@ async function swap(sellCc: boolean, amountIn: Dec) {
   const before = { in: await free(trader, inI), out: await free(trader, outI) }
   await wallet.submit(
     [trader],
-    [placeSwap({ trader, operator, poolId: POOL, requestId, instrumentIn: inI, amountIn, instrumentOut: outI, minOut: minOutFor(q.amountOut, 100), deadline, factory, inputHoldingCids: ids, requestedAt })] as never,
+    [placeSwap({ desk: desk.contractId, trader, requestId, instrumentIn: inI, amountIn, instrumentOut: outI, minOut: minOutFor(q.amountOut, 100), deadline, factory, inputHoldingCids: ids, requestedAt })] as never,
     [],
-    dedupeDisclosed(factory.disclosed),
+    dedupeDisclosed([desk, ...factory.disclosed]),
   )
   const receipt = await until('the swap to settle', async () => (await wallet.query<SwapReceipt>(trader, [DEX.SwapReceipt])).find((r) => r.payload.requestId === requestId))
   const got = dec(receipt.payload.amountOut)
@@ -263,9 +265,9 @@ async function rejectedFor(p: string, requestId: string) {
   const before = await free(trader, cc)
   await wallet.submit(
     [trader],
-    [placeSwap({ trader, operator, poolId: POOL, requestId, instrumentIn: cc, amountIn, instrumentOut: usd, minOut: dec(1_000), deadline, factory, inputHoldingCids: ids, requestedAt })] as never,
+    [placeSwap({ desk: desk.contractId, trader, requestId, instrumentIn: cc, amountIn, instrumentOut: usd, minOut: dec(1_000), deadline, factory, inputHoldingCids: ids, requestedAt })] as never,
     [],
-    dedupeDisclosed(factory.disclosed),
+    dedupeDisclosed([desk, ...factory.disclosed]),
   )
   const r = await rejectedFor(trader, requestId)
   say(`rejected: ${r.payload.reason.slice(0, 90)}`)
@@ -286,9 +288,9 @@ async function rejectedFor(p: string, requestId: string) {
   ])
   await wallet.submit(
     [lp2],
-    [placeDeposit({ provider: lp2, operator, poolId: POOL, requestId: `${requestId}-skewed`, instrumentA: cc, amountA: dec(1_000), instrumentB: usd, amountB: dec(30), termEnd, factoryA: fa, holdingsA: holdA, factoryB: fb, holdingsB: holdB, requestedAt })] as never,
+    [placeDeposit({ desk: desk.contractId, provider: lp2, requestId: `${requestId}-skewed`, instrumentA: cc, amountA: dec(1_000), instrumentB: usd, amountB: dec(30), termEnd, factoryA: fa, holdingsA: holdA, factoryB: fb, holdingsB: holdB, requestedAt })] as never,
     [],
-    dedupeDisclosed([...fa.disclosed, ...fb.disclosed]),
+    dedupeDisclosed([desk, ...fa.disclosed, ...fb.disclosed]),
   )
   const r = await rejectedFor(lp2, `${requestId}-skewed`)
   say(`rejected: ${r.payload.reason.slice(0, 90)}`)

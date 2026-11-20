@@ -336,18 +336,22 @@ template PoolRules
       controller operator
       do setStatus operator poolId stateCid Active
 
-    -- The pool's first, empty state. Only valid while there is none, which
-    -- the operator's setup guarantees by creating it right after the rules.
-    nonconsuming choice PoolRules_Open : ContractId PoolState
+    -- The pool's first, empty state and the desk wallets place orders at.
+    -- Only valid while there are none, which the operator's setup
+    -- guarantees by opening the pool right after creating the rules.
+    nonconsuming choice PoolRules_Open : (ContractId PoolState, ContractId OrderDesk)
       controller operator
-      do create PoolState with
-           operator
-           poolId
-           reserveA = 0.0
-           reserveB = 0.0
-           positions = 0
-           status = Active
-           swaps = 0
+      do
+        state <- create PoolState with
+          operator
+          poolId
+          reserveA = 0.0
+          reserveB = 0.0
+          positions = 0
+          status = Active
+          swaps = 0
+        desk <- create OrderDesk with operator; poolId
+        pure (state, desk)
 
 -- Helpers
 ----------

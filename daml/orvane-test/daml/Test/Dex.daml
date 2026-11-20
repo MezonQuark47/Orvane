@@ -510,3 +510,29 @@ swapRun env i n seed k
       k' <- poolProduct env
       assertMsg ("x * y shrank at swap " <> show i) (k' >= k)
       swapRun env (i + 1) n next k'
+
+-- The desk
+-----------
+
+-- | The desk carries the operator's signature, but an order still needs the
+-- user's own: nobody can lock someone else's funds through it.
+test_nobody_orders_for_someone_else : Script ()
+test_nobody_orders_for_someone_else = do
+  env <- twoProviders
+  now <- getTime
+  asOf <- asOfNow
+  ds <- walletDisclosures env
+  holdings <- freeHoldings env.trader env.cc
+  submitMustFail (actAs env.outsider <> discloseMany ds) $ exerciseCmd env.desk OrderDesk_Swap with
+    trader = env.trader
+    requestId = "not-mine"
+    instrumentIn = env.cc
+    amountIn = 10.0
+    instrumentOut = env.usd
+    minOut = 1.0
+    deadline = addRelTime now (minutes 10)
+    allocationFactory = toInterfaceContractId env.ccRules
+    inputHoldingCids = holdings
+    requestedAt = asOf
+    extraArgs = ctx env env.cc
+  free env.trader env.cc >>= (=== 100000.0)

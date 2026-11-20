@@ -59,7 +59,7 @@ async function handle(net: Network, req: IncomingMessage): Promise<unknown> {
       network: net.cfg.network,
       operator: net.operator,
       instruments: Object.fromEntries(Object.entries(net.instruments).map(([k, i]) => [k, { ...i, label: net.labels[k] }])),
-      pools: [...net.pools.values()].map(({ terms }) => ({ ...terms, settlement: poolSettlement(net.operator, terms.poolId) })),
+      pools: [...net.pools.values()].map(({ terms, desk }) => ({ ...terms, settlement: poolSettlement(net.operator, terms.poolId), desk })),
     }
   }
 

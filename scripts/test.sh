@@ -5,5 +5,5 @@ set -euo pipefail
 export JAVA_TOOL_OPTIONS="-Duser.language=en -Duser.country=US"
 cd "$(dirname "$0")/../daml"
 dpm build --all
-cd orvane-dex-test
+cd orvane-test
 dpm test

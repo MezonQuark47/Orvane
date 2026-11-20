@@ -1,6 +1,6 @@
 import { animate, motion, useMotionValue } from 'motion/react'
 import { useEffect, useId, useMemo, useRef } from 'react'
-import type { PricePoint } from '../ledger/OrvaneProvider.tsx'
+type PricePoint = { price: number }
 
 export const fmt = (n: number, digits = 2) =>
   Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }) : '–'
@@ -190,5 +190,18 @@ export function PageSkeleton() {
         </section>
       </div>
     </div>
+  )
+}
+
+// The two glyphs the vault knows: a dollar ring for stable assets, a hexagon
+// for Canton Coin.
+export const glyphFor = (instrumentKey: string) => (/usd/i.test(instrumentKey) ? 'USDx' : 'CCx')
+
+// Shown where an action needs a wallet. Opens the connect dialog.
+export function ConnectFirst({ what }: { what: string }) {
+  return (
+    <button className="primary" onClick={() => window.dispatchEvent(new CustomEvent('orvane:connect'))}>
+      <span>Connect a wallet to {what}</span>
+    </button>
   )
 }

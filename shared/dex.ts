@@ -4,16 +4,15 @@
 
 import { ZERO, TICK, dec, div, fromInt, mul, show, sum, abs, type Dec } from './decimal.ts'
 
-const pkg = '#orvane-dex'
+const pkg = '#orvane'
 export const DEX = {
   PoolRules: `${pkg}:Orvane.Dex.Pool:PoolRules`,
   PoolState: `${pkg}:Orvane.Dex.State:PoolState`,
   LpPosition: `${pkg}:Orvane.Dex.State:LpPosition`,
   SwapReceipt: `${pkg}:Orvane.Dex.State:SwapReceipt`,
   PositionClosed: `${pkg}:Orvane.Dex.State:PositionClosed`,
-  SwapOrder: `${pkg}:Orvane.Dex.Orders:SwapOrder`,
+  OrderDesk: `${pkg}:Orvane.Dex.Orders:OrderDesk`,
   SwapRequest: `${pkg}:Orvane.Dex.Orders:SwapRequest`,
-  DepositOrder: `${pkg}:Orvane.Dex.Orders:DepositOrder`,
   DepositRequest: `${pkg}:Orvane.Dex.Orders:DepositRequest`,
   WithdrawRequest: `${pkg}:Orvane.Dex.Orders:WithdrawRequest`,
   RenewRequest: `${pkg}:Orvane.Dex.Orders:RenewRequest`,
@@ -266,11 +265,14 @@ export const createPoolRules = (t: PoolTerms) => ({
   },
 })
 
+// Orders are one exercise on the pool's order desk: wallets of external
+// parties can only sign transactions with a single root action. The desk
+// belongs to the operator, so the wallet submits it as a disclosed contract.
+
 // A trader's order, placed from their wallet in one transaction.
 export function placeSwap(o: {
+  desk: string
   trader: string
-  operator: string
-  poolId: string
   requestId: string
   instrumentIn: InstrumentId
   amountIn: Dec
@@ -282,21 +284,18 @@ export function placeSwap(o: {
   requestedAt: Date
 }) {
   return {
-    CreateAndExerciseCommand: {
-      templateId: DEX.SwapOrder,
-      createArguments: {
+    ExerciseCommand: {
+      templateId: DEX.OrderDesk,
+      contractId: o.desk,
+      choice: 'OrderDesk_Swap',
+      choiceArgument: {
         trader: o.trader,
-        operator: o.operator,
-        poolId: o.poolId,
         requestId: o.requestId,
         instrumentIn: o.instrumentIn,
         amountIn: show(o.amountIn),
         instrumentOut: o.instrumentOut,
         minOut: show(o.minOut),
         deadline: o.deadline.toISOString(),
-      },
-      choice: 'SwapOrder_Place',
-      choiceArgument: {
         allocationFactory: o.factory.factoryId,
         inputHoldingCids: o.inputHoldingCids,
         requestedAt: o.requestedAt.toISOString(),
@@ -308,9 +307,8 @@ export function placeSwap(o: {
 
 // A provider's deposit, placed from their wallet in one transaction.
 export function placeDeposit(o: {
+  desk: string
   provider: string
-  operator: string
-  poolId: string
   requestId: string
   instrumentA: InstrumentId
   amountA: Dec
@@ -324,21 +322,18 @@ export function placeDeposit(o: {
   requestedAt: Date
 }) {
   return {
-    CreateAndExerciseCommand: {
-      templateId: DEX.DepositOrder,
-      createArguments: {
+    ExerciseCommand: {
+      templateId: DEX.OrderDesk,
+      contractId: o.desk,
+      choice: 'OrderDesk_Deposit',
+      choiceArgument: {
         provider: o.provider,
-        operator: o.operator,
-        poolId: o.poolId,
         requestId: o.requestId,
         instrumentA: o.instrumentA,
         amountA: show(o.amountA),
         instrumentB: o.instrumentB,
         amountB: show(o.amountB),
         termEnd: o.termEnd.toISOString(),
-      },
-      choice: 'DepositOrder_Place',
-      choiceArgument: {
         factoryA: o.factoryA.factoryId,
         holdingsA: o.holdingsA,
         extraArgsA: o.factoryA.extraArgs,

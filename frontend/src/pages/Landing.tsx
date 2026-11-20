@@ -1,17 +1,16 @@
 // The landing: one long camera move through the vault. Each chapter reserves
 // a stage and the vault flies from one to the next as you scroll, changing its
-// pose on the way: hero, exchange, payments, credit, privacy, and back.
+// pose on the way: hero, swap, liquidity, privacy, and back.
 
 import { motion } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { T } from '../../../shared/amm.ts'
-import { X } from '../../../shared/exchange.ts'
-import { useOrvane } from '../ledger/OrvaneProvider.tsx'
+import { toNumber } from '../../../shared/decimal.ts'
+import { useDex } from '../ledger/dex.tsx'
 import { VaultStage, type StageScene } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
 import { fmtCompact } from '../ui/bits.tsx'
 
-type Go = (tab: 'trade' | 'payments' | 'lending' | 'lens') => void
+type Go = (tab: 'swap' | 'liquidity' | 'privacy') => void
 
 const ease = [0.22, 1, 0.36, 1] as const
 const REPO = 'https://github.com/mezonquark47/orvane'
@@ -32,8 +31,8 @@ export default function Landing({ go }: { go: Go }) {
 // ---------------------------------------------------------------- hero
 
 const HEADLINE = [
-  ['Money', 'that', 'keeps'],
-  ['its', 'own', 'counsel.'],
+  ['Liquidity', 'that', 'never'],
+  ['leaves', 'your', 'wallet.'],
 ]
 
 function Hero({ go }: { go: Go }) {
@@ -48,7 +47,7 @@ function Hero({ go }: { go: Go }) {
     <section className="ln-hero">
       <VaultStage scene="hero" className="ln-hero-stage" />
       <motion.p className="ln-kicker" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, ease, delay: 0.2 }}>
-        <span className="ln-pip" /> Private payments &amp; DeFi on the Canton Network
+        <span className="ln-pip" /> The private exchange on the Canton Network
       </motion.p>
       <h1 className="ln-mega">
         {HEADLINE.map((line, li) => (
@@ -69,10 +68,10 @@ function Hero({ go }: { go: Go }) {
       </h1>
       <motion.div className="ln-hero-foot" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, ease, delay: 1.1 }}>
         <p className="ln-lede">
-          Swap, run payroll, settle invoices and borrow against Canton Coin. Each in one atomic transaction that only its parties can read.
+          Swap Canton Coin in one atomic transaction that only you and the operator can read. Provide liquidity without handing it to anyone: it stays in your account, and comes back on its own at the end of its term.
         </p>
         <div className="ln-ctas">
-          <button className="ln-btn" onClick={() => go('trade')}>
+          <button className="ln-btn" onClick={() => go('swap')}>
             Enter the vault <Arrow />
           </button>
           <button className="ln-ghost" onClick={() => document.getElementById('privacy')?.scrollIntoView({ behavior: 'smooth' })}>
@@ -85,58 +84,16 @@ function Hero({ go }: { go: Go }) {
   )
 }
 
-// What the pool is doing right now, read from the ledger. A new pool version
-// means something settled, and the vault pulses.
+// What the pool is doing right now, from the operator's public API. More
+// fills than last time means something settled, and the vault pulses.
 function usePoolPulse() {
-  const { status, config, ledger } = useOrvane()
-  const [state, setState] = useState<{ count?: number; last?: number; a?: number; b?: number }>({})
-
+  const { config, pools } = useDex()
+  const live = config ? pools.get(config.pools[0]?.poolId ?? '') : undefined
+  const swaps = live?.swaps
   useEffect(() => {
-    if (status !== 'ready' || !config) return
-    const tpl = config.exchange ? X.ExchangePool : T.Pool
-    const poolId = config.exchange?.poolId ?? config.poolId
-    const ofPool = (arg: unknown) => (arg as { poolId?: string }).poolId === poolId
-    let alive = true
-    let cid: string | undefined
-    let timer: ReturnType<typeof setTimeout>
-
-    // the full count once, then only watch the live pool contract
-    ledger
-      .history(config.operator, [tpl])
-      .then((h) => {
-        const mine = h.filter((u) => ofPool(u.event.createArgument))
-        const at = mine.at(-1)?.at
-        if (alive) setState((s) => ({ ...s, count: mine.length, last: at ? Date.parse(at) : s.last }))
-      })
-      .catch(() => {})
-
-    const tick = async () => {
-      try {
-        const [p] = (await ledger.query<{ poolId: string; reserveA: string; reserveB: string }>(config.operator, [tpl])).filter((c) => ofPool(c.payload))
-        if (alive && p) {
-          const moved = cid !== undefined && p.contractId !== cid
-          cid = p.contractId
-          if (moved) signalSettled()
-          setState((s) => ({
-            count: moved && s.count !== undefined ? s.count + 1 : s.count,
-            last: moved ? Date.now() : s.last,
-            a: +p.payload.reserveA,
-            b: +p.payload.reserveB,
-          }))
-        }
-      } catch {
-        /* keep the last reading */
-      }
-      if (alive) timer = setTimeout(tick, 2500)
-    }
-    tick()
-    return () => {
-      alive = false
-      clearTimeout(timer)
-    }
-  }, [status, config, ledger])
-
-  return state
+    if (swaps) signalSettled()
+  }, [swaps])
+  return live
 }
 
 function ago(ms: number) {
@@ -148,23 +105,31 @@ function ago(ms: number) {
 }
 
 function Ticker() {
-  const { status, config } = useOrvane()
-  const pool = usePoolPulse()
+  const { status, config, instrument } = useDex()
+  const live = usePoolPulse()
+  const pool = config?.pools[0]
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
 
-  const cc = config?.exchange ? 'CC' : 'CCx'
-  const network = status === 'offline' ? 'Offline' : config?.network === 'localnet' ? 'Canton LocalNet' : status === 'ready' ? 'Local sandbox' : 'Connecting'
+  const last = live?.recent.at(-1)?.at
+  const network = status === 'offline' ? 'Offline' : config?.network === 'localnet' ? 'Canton LocalNet' : status === 'ready' ? (config?.network ?? '') : 'Connecting'
   return (
     <motion.div className="ln-ticker" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 1.2, delay: 1.5 }}>
       <Stat k="Ledger" v={network} live={status === 'ready'} />
-      <Stat k="Pool settlements" v={pool.count === undefined ? '—' : pool.count.toLocaleString('en-US')} />
-      <Stat k="Last settlement" v={pool.last ? ago(now - pool.last) : '—'} />
-      <Stat k="Pool depth" v={pool.a !== undefined && pool.b !== undefined ? `${fmtCompact(pool.a)} USDx · ${fmtCompact(pool.b)} ${cc}` : '—'} />
-      <Stat k="Public observers" v="0" accent />
+      <Stat k="Swaps settled" v={live ? live.swaps.toLocaleString('en-US') : '—'} />
+      <Stat k="Last swap" v={last ? ago(now - last) : '—'} />
+      <Stat
+        k="Pool depth"
+        v={
+          live && pool
+            ? `${fmtCompact(toNumber(live.reserveA))} ${instrument(pool.instrumentA).label} · ${fmtCompact(toNumber(live.reserveB))} ${instrument(pool.instrumentB).label}`
+            : '—'
+        }
+      />
+      <Stat k="Funds held by Orvane" v="0" accent />
     </motion.div>
   )
 }
@@ -185,120 +150,114 @@ interface ChapterData {
   id: string
   n: string
   scene: StageScene
-  tab: 'trade' | 'payments' | 'lending'
+  tab: 'swap' | 'liquidity'
   open: string
   kicker: string
   title: ReactNode
   body: string
-  card: ReactNode
+  Card: () => ReactNode
   lift?: number
 }
 
 const Seal = ({ children }: { children: ReactNode }) => <span className="ln-seal">{children}</span>
 
+// What one unit of the pool's first asset fetches right now. Live, from the
+// pool's public reserves; nothing on this page is made up.
+function SwapCard() {
+  const { config, pools, instrument } = useDex()
+  const pool = config?.pools[0]
+  const live = pool ? pools.get(pool.poolId) : undefined
+  const a = pool ? instrument(pool.instrumentA).label : ''
+  const b = pool ? instrument(pool.instrumentB).label : ''
+  const price = live && live.reserveA > 0n ? toNumber(live.reserveB) / toNumber(live.reserveA) : undefined
+  return (
+    <div className="ln-card">
+      <div className="ln-card-head">
+        <span>Your receipt</span>
+        <Seal>only you + operator</Seal>
+      </div>
+      <div className="ln-big">
+        1 <small>{a}</small>
+      </div>
+      <div className="ln-arrow" />
+      <div className="ln-big brass">
+        {price === undefined ? '—' : price.toLocaleString('en-US', { maximumSignificantDigits: 6 })} <small>{b}</small>
+      </div>
+      <div className="ln-row">
+        <span>pool price now · fee {pool ? (pool.feeBps / 100).toFixed(2) : '—'}%</span>
+        <span>1 transaction</span>
+      </div>
+    </div>
+  )
+}
+
+// The pool's real terms: how long a deposit can be locked, and when one
+// made today would come back on its own.
+function LiquidityCard() {
+  const { config } = useDex()
+  const pool = config?.pools[0]
+  const until = pool ? new Date(Date.now() + Math.min(30 * 86_400, pool.maxTermSeconds) * 1000) : undefined
+  return (
+    <div className="ln-card">
+      <div className="ln-card-head">
+        <span>Your position</span>
+        <Seal>only you + operator</Seal>
+      </div>
+      <div className="ln-row">
+        <span>held in</span>
+        <span className="verd">your own account</span>
+      </div>
+      <div className="ln-row">
+        <span>withdraw</span>
+        <span>any time</span>
+      </div>
+      <div className="ln-row">
+        <span>unlocks by itself</span>
+        <span>{until ? until.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—'}</span>
+      </div>
+      <div className="ln-row">
+        <span>earns</span>
+        <span>{pool ? `${(pool.feeBps / 100).toFixed(2)}% of every trade` : '—'}</span>
+      </div>
+    </div>
+  )
+}
+
 const CHAPTERS: ChapterData[] = [
   {
-    id: 'exchange',
+    id: 'swap',
     n: 'I',
     scene: 'trade',
-    tab: 'trade',
+    tab: 'swap',
     open: 'Open the exchange',
-    kicker: 'Exchange',
+    kicker: 'Swap',
     title: (
       <>
-        One pool, two sides,
+        One pool, every provider,
         <br />
         <em>no audience.</em>
       </>
     ),
-    body: 'A constant-product pool for USDx and Canton Coin. Traders see their own fill and pool members see the price. Nobody sees who traded, or how much.',
-    card: (
-      <div className="ln-card">
-        <div className="ln-card-head">
-          <span>Your receipt</span>
-          <Seal>only you + operator</Seal>
-        </div>
-        <div className="ln-big">
-          1,000.00 <small>USDx</small>
-        </div>
-        <div className="ln-arrow" />
-        <div className="ln-big brass">
-          163,912.41 <small>CC</small>
-        </div>
-        <div className="ln-row">
-          <span>fee 0.30%</span>
-          <span>1 transaction</span>
-        </div>
-      </div>
-    ),
+    body: 'Sell an exact amount for at least the minimum you set, in one atomic transaction. Your trade settles against every provider at once through the operator, so they never learn who you are, and you never learn who they are.',
+    Card: SwapCard,
   },
   {
-    id: 'payments',
+    id: 'liquidity',
     n: 'II',
-    scene: 'payments',
-    tab: 'payments',
-    open: 'Open payments',
-    kicker: 'Payments',
-    title: (
-      <>
-        Payroll each person
-        <br />
-        <em>reads alone.</em>
-      </>
-    ),
-    body: 'One signature pays everyone, each in the currency they chose. Every employee gets a payslip only they can open. The auditor gets the totals and never a name.',
-    card: (
-      <div className="ln-card">
-        <div className="ln-card-head">
-          <span>Payslip · November</span>
-          <Seal>only Maya + Acme</Seal>
-        </div>
-        <div className="ln-big">
-          4,200.00 <small>USDx</small>
-        </div>
-        <div className="ln-row">
-          <span>paid as</span>
-          <span className="verd">688,524.6 CC</span>
-        </div>
-        <div className="ln-row">
-          <span>advance repaid</span>
-          <span>300.00 USDx</span>
-        </div>
-      </div>
-    ),
-  },
-  {
-    id: 'credit',
-    n: 'III',
-    scene: 'lending',
-    tab: 'lending',
-    open: 'Open credit',
+    scene: 'liquidity',
+    tab: 'liquidity',
+    open: 'Provide liquidity',
     lift: 0.35,
-    kicker: 'Credit',
+    kicker: 'Liquidity',
     title: (
       <>
-        Borrow against Canton Coin.
+        Earn on every trade.
         <br />
-        <em>Quietly.</em>
+        <em>Keep the keys.</em>
       </>
     ),
-    body: 'Lock CC and borrow up to 60% of its value in USDx, priced from the pool. If a loan has to be liquidated, it settles on the ledger between the borrower and the market, not in a public mempool.',
-    card: (
-      <div className="ln-card">
-        <div className="ln-card-head">
-          <span>Loan health</span>
-          <Seal>only you + market</Seal>
-        </div>
-        <div className="ln-big">1.48</div>
-        <div className="ln-meter">
-          <i style={{ width: '62%' }} />
-        </div>
-        <div className="ln-row">
-          <span>250,000 CC locked</span>
-          <span>900 USDx owed</span>
-        </div>
-      </div>
-    ),
+    body: 'Your deposit is locked in your own account for a term you pick, never moved to a pool contract. Withdraw whenever you like. If Orvane disappears, the token standard unlocks your funds on their own when the term ends.',
+    Card: LiquidityCard,
   },
 ]
 
@@ -323,7 +282,7 @@ function Chapter({ chapter: c, flip, go }: { chapter: ChapterData; flip: boolean
         </p>
         <h2 className="ln-title">{c.title}</h2>
         <p className="ln-body">{c.body}</p>
-        {c.card}
+        <c.Card />
         <button className="ln-ghost ln-open" onClick={() => go(c.tab)}>
           {c.open} <Arrow />
         </button>
@@ -334,13 +293,12 @@ function Chapter({ chapter: c, flip, go }: { chapter: ChapterData; flip: boolean
 
 // ---------------------------------------------------------------- privacy
 
-const WHO = ['You', 'Counterparty', 'Operator', 'Auditor', 'Everyone else']
+const WHO = ['You', 'Other traders', 'Other LPs', 'Operator', 'Everyone else']
 const WHAT: [string, boolean[]][] = [
-  ['That you traded', [true, false, true, false, false]],
-  ['Pool price', [true, true, true, false, false]],
-  ['Your payslip', [true, true, false, false, false]],
-  ['Payroll total', [true, false, false, true, false]],
-  ['Loan and collateral', [true, false, true, false, false]],
+  ['That you traded, and how much', [true, false, false, true, false]],
+  ['Your liquidity position', [true, false, false, true, false]],
+  ['Who was on the other side', [false, false, false, true, false]],
+  ['Pool reserves and price', [true, true, true, true, true]],
 ]
 
 function Privacy({ go }: { go: Go }) {
@@ -389,9 +347,10 @@ function Privacy({ go }: { go: Go }) {
           ))}
         </div>
         <p className="ln-note">
-          On Canton a party only receives the parts of a transaction it is a stakeholder in. Orvane is built on that, in Daml.{' '}
-          <button className="ln-inline" onClick={() => go('lens')}>
-            See it live in the privacy lens →
+          On Canton a party only receives the parts of a transaction it is a stakeholder in, and Orvane routes every leg through the operator, so
+          traders and providers never meet. As with any token, an asset's registry also sees transfers of its own asset.{' '}
+          <button className="ln-inline" onClick={() => go('privacy')}>
+            See it live on your own node →
           </button>
         </p>
       </motion.div>
@@ -415,7 +374,7 @@ function Finale({ go }: { go: Go }) {
           The vault is <em>open.</em>
         </h2>
         <div className="ln-ctas">
-          <button className="ln-btn" onClick={() => go('trade')}>
+          <button className="ln-btn" onClick={() => go('swap')}>
             Enter the vault <Arrow />
           </button>
           <a className="ln-ghost" href={REPO} target="_blank" rel="noreferrer">

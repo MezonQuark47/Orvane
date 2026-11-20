@@ -1,9 +1,9 @@
 // Turns ledger and network failures into something a person can act on.
 //
 // Canton errors arrive as JSON with a cause like "Interpretation error: ...
-// Assertion failed: insufficient balance" (LedgerError already pulls out the
-// assertion). The Daml contracts fail with short lower-case reasons; those are
-// mapped to a sentence plus a hint. Anything unknown falls through as-is.
+// check failed: <reason>". The DEX contracts state each check as what must
+// hold; those map to a sentence plus a hint. Wallet errors (CIP-0103) and
+// network failures are covered too. Anything unknown falls through as-is.
 
 import { LedgerError } from '../../../shared/ledger.ts'
 
@@ -17,43 +17,32 @@ export interface Explained {
 type Rule = [RegExp, string, string?]
 
 const RULES: Rule[] = [
-  // reaching the ledger
-  [/failed to fetch|networkerror|load failed|econnrefused|bad gateway|service unavailable/i, "Can't reach the ledger", 'Check that Canton and the Orvane operator are running, then try again.'],
-  [/unauthenticated|permission_denied|invalid token|jwt/i, 'The ledger refused our credentials', 'Restart the dev server so it signs a fresh token.'],
-  [/deadline_exceeded|timed? ?out|timeout/i, 'The ledger took too long to answer', 'It may still settle. Check Activity in a moment before retrying.'],
-  [/duplicate_command/i, 'Already submitted', 'The same command is still being processed.'],
-  [/contract_not_found|could not be found|inactive_contracts|locked_contracts|contract.*(archived|consumed)/i, 'Something changed while you were signing', 'Another transaction used these funds first. The page has refreshed, so try again.'],
+  // the wallet
+  [/popup/i, "Your browser blocked the wallet window", "Allow pop-ups for this site, then connect again."],
+  [/user rejected|rejected by user|user denied|declined|4001/i, 'You declined in your wallet', 'Nothing was signed and nothing moved.'],
+  [/not connected|no wallet|connect a wallet/i, 'Connect a wallet first'],
+  [/gateway|3030|walletconnect|session expired|4100|unauthori[sz]ed/i, "Your wallet isn't reachable", 'Check that the wallet is running and you are signed in, then connect again.'],
 
-  // the operator never picked the order up
-  [/not settled yet|did not settle this request/i, "It didn't settle", 'If the price moved past your minimum, your funds went back to you.'],
+  // reaching the network
+  [/failed to fetch|networkerror|load failed|econnrefused|bad gateway|service unavailable/i, "Can't reach the network", 'Check that LocalNet and the Orvane operator are running, then try again.'],
+  [/deadline_exceeded|timed? ?out|timeout/i, 'The network took too long to answer', 'It may still settle. Check Activity in a moment before retrying.'],
+  [/duplicate_command/i, 'Already submitted', 'The same request is still being processed.'],
+  [/contract_not_found|could not be found|inactive_contracts|locked_contracts|contract.*(archived|consumed)/i, 'Something changed while you were signing', 'Another transaction used these funds first. Try again.'],
 
-  // slippage and price moves
-  [/slippage|output above the pool's quote/i,'The price moved past your limit', 'Nothing was spent. Allow a little more slippage or try a smaller amount.'],
-  [/conversion needs more than the buyer's maximum/i, 'The price moved past your limit', 'The conversion needed more than you allowed. Nothing was spent.'],
+  // what the operator hands back (the contract's own checks)
+  [/not settled yet/i, "It hasn't settled yet", 'The operator may be busy. If it is handed back, your funds unlock by themselves.'],
+  [/output meets the trader's minimum/i, 'The price moved past your limit', 'Nothing was spent. Allow a little more slippage or trade a smaller amount.'],
+  [/swap deadline/i, 'The swap waited too long', 'Nothing was spent. Try again.'],
+  [/close enough to the pool price/i, 'The pool price moved', 'Your deposit was handed back. Try again at the new price.'],
+  [/room for another position|pool is full/i, 'The pool is full', 'It takes a limited number of providers. Try again later.'],
+  [/pool status|paused/i, 'The pool is paused', 'Swaps and new deposits are on hold. You can still withdraw.'],
+  [/shorter than the pool's minimum|longer than the pool's maximum|term end/i, "That term isn't allowed", 'Pick one of the offered terms.'],
+  [/pays out something|keeps some of the output/i, 'That amount is too small or too large for the pool'],
+  [/no open position/i, 'That position is already closed'],
 
   // balances
-  [/insufficient balance for payroll|no funds left for payroll/i, "The treasury can't cover this payroll", 'Add USDx to the employer, or lower the pay lines.'],
-  [/insufficient funds to settle advances/i, "Payday can't cover the open wage advances", 'Add USDx to the employer before running payroll.'],
-  [/insufficient collateral balance/i, 'Not enough Canton Coin to lock as collateral', 'Lock less, or top up CC from Holdings.'],
-  [/insufficient balance to repay|repayment does not cover what is owed/i, "That doesn't cover what is owed", 'Interest keeps accruing; top up USDx and repay again.'],
-  [/insufficient (balance|funds)|no (input )?holdings|no holdings given/i, 'Not enough balance', 'Lower the amount, or top up from the faucet in Holdings.'],
-
-  // credit
-  [/borrow exceeds the collateral's limit/i, "That's more than your collateral allows", 'You can borrow up to 60% of the collateral’s value.'],
-  [/not enough (idle )?cash|market has no cash/i, "The market doesn't have that much USDx right now", 'Borrow less, or wait for lenders to supply more.'],
-  [/loan is healthy/i, 'This loan is healthy', 'It can only be liquidated once its health drops below 1.'],
-
-  // wage advances
-  [/above the advance limit/i, "That's above your advance limit", 'Ask your employer to raise the limit, or take less.'],
-  [/one open advance per pay period/i, 'You already have an advance this pay period', 'It is repaid automatically on payday.'],
-  [/advance larger than the employee's pay/i, 'The advance is larger than the pay', 'Take less than this period’s net pay.'],
-
-  // input checks and expiries
-  [/must be positive|positive amount|amount must be > 0/i, 'Enter an amount above zero'],
-  [/deposit too small/i, 'That deposit is too small for the pool'],
-  [/deadline passed|transfer expired|expired/i, 'This request expired', 'Nothing was moved. Start it again.'],
-  [/did not complete the allocation immediately/i, "The Canton Coin registry didn't settle right away", 'Try again in a moment.'],
-  [/another registry or instrument|unknown instrument|wrong (asset|collateral asset|registry admin)|not in this pool/i, "These funds can't be used here", 'They belong to a different instrument or registry.'],
+  [/not enough funds|insufficient (balance|funds)|missing amount/i, 'Not enough balance', 'Lower the amount, or wait for your funds to unlock.'],
+  [/at least one input holding/i, 'Not enough balance', 'You have no free holdings of this asset.'],
 ]
 
 const sentence = (s: string) => {

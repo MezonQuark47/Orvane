@@ -1,5 +1,5 @@
 sdk-version: 3.7.3
-name: orvane-dex
+name: orvane
 source: daml
 version: 0.1.0
 dependencies:

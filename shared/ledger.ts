@@ -103,16 +103,22 @@ export async function hmacJwt(auth: HmacAuth, userId: string, ttlSeconds = 7 * 2
   return `${header}.${payload}.${b64url(sig)}`
 }
 
+export type Transport = (path: string, body?: unknown) => Promise<unknown>
+
 export class JsonLedger {
   readonly baseUrl: string
   readonly userId: string
   private readonly auth?: HmacAuth
   private token?: { value: string; exp: number }
+  private readonly transport?: Transport
 
-  constructor(baseUrl: string, userId = 'participant_admin', auth?: HmacAuth) {
+  // `transport` replaces HTTP, e.g. to read through a wallet's own ledger
+  // connection (CIP-0103 `ledgerApi`) instead of talking to a participant.
+  constructor(baseUrl: string, userId = 'participant_admin', auth?: HmacAuth, transport?: Transport) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
     this.userId = userId
     this.auth = auth
+    this.transport = transport
   }
 
   // A client for the same participant acting as another ledger user.
@@ -132,6 +138,7 @@ export class JsonLedger {
   }
 
   private async call<T>(path: string, body?: unknown): Promise<T> {
+    if (this.transport) return (await this.transport(path, body)) as T
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: body === undefined ? 'GET' : 'POST',
       headers: await this.headers(body !== undefined),

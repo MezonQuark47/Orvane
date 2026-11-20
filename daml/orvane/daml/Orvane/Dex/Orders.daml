@@ -2,9 +2,9 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- | What traders and providers sign. Each order is placed from the user's
--- wallet in a single transaction (create-and-exercise of the `*_Place`
--- choice), which locks the funds through the registry and files a request
--- for the operator to fill or reject.
+-- wallet with one choice on the pool's `OrderDesk`, which locks the funds
+-- through the registry and files a request for the operator to fill or
+-- reject.
 module Orvane.Dex.Orders where
 
 import DA.Foldable (forA_)
@@ -32,31 +32,34 @@ template RequestRejected
     signatory operator
     observer party
 
--- Swaps
---------
-
--- | A trader's order to sell exactly `amountIn` for at least `minOut`.
-template SwapOrder
+-- | Where wallets place orders for one pool.
+--
+-- Wallets hosted for external parties can only sign transactions with a
+-- single root action, so an order is one exercise on this contract, which
+-- the operator publishes and hands to wallets as a disclosed contract. The
+-- choices act only with the user's authority where it matters: the
+-- allocation is created with the user as the only actor, and the request is
+-- signed by the user alone.
+template OrderDesk
   with
-    trader : Party
     operator : Party
     poolId : Text
-    requestId : Text
-    instrumentIn : H.InstrumentId
-    amountIn : Decimal
-    instrumentOut : H.InstrumentId
-    minOut : Decimal
-    deadline : Time
   where
-    signatory trader
-    ensure amountIn > 0.0 && minOut > 0.0 && instrumentIn /= instrumentOut && not (T.isEmpty requestId)
+    signatory operator
 
-    -- Lock the input for the operator. The allocation names the exact leg
-    -- (trader to operator, `amountIn`), so it can be settled for nothing
-    -- else, and it is not committed: the trader can pull it back at any time
-    -- before the swap settles.
-    choice SwapOrder_Place : ContractId SwapRequest
+    -- Sell exactly `amountIn` for at least `minOut`. The input is locked in
+    -- an allocation that names the exact leg (trader to operator,
+    -- `amountIn`), so it can be settled for nothing else, and it is not
+    -- committed: the trader can pull it back at any time before it settles.
+    nonconsuming choice OrderDesk_Swap : ContractId SwapRequest
       with
+        trader : Party
+        requestId : Text
+        instrumentIn : H.InstrumentId
+        amountIn : Decimal
+        instrumentOut : H.InstrumentId
+        minOut : Decimal
+        deadline : Time
         allocationFactory : ContractId AI.AllocationFactory
         inputHoldingCids : [ContractId H.Holding]
         requestedAt : Time
@@ -73,6 +76,41 @@ template SwapOrder
           actors = [trader]
         create SwapRequest with ..
 
+    -- Lock `amountA` and `amountB` in the provider's own account until
+    -- `termEnd`, for the operator to open a position on.
+    nonconsuming choice OrderDesk_Deposit : ContractId DepositRequest
+      with
+        provider : Party
+        requestId : Text
+        instrumentA : H.InstrumentId
+        amountA : Decimal
+        instrumentB : H.InstrumentId
+        amountB : Decimal
+        termEnd : Time
+        factoryA : ContractId AI.AllocationFactory
+        holdingsA : [ContractId H.Holding]
+        extraArgsA : ExtraArgs
+        factoryB : ContractId AI.AllocationFactory
+        holdingsB : [ContractId H.Holding]
+        extraArgsB : ExtraArgs
+        requestedAt : Time
+      controller provider
+      do
+        let lock instrument amount factory holdings args =
+              allocate instrument.admin factory AI.AllocationFactory_Allocate with
+                settlement = poolSettlement operator poolId
+                allocation = providerFunding provider instrument amount termEnd
+                requestedAt
+                inputHoldingCids = holdings
+                extraArgs = args
+                actors = [provider]
+        allocationA <- lock instrumentA amountA factoryA holdingsA extraArgsA
+        allocationB <- lock instrumentB amountB factoryB holdingsB extraArgsB
+        create DepositRequest with ..
+
+-- Swaps
+--------
+
 template SwapRequest
   with
     trader : Party
@@ -88,6 +126,7 @@ template SwapRequest
   where
     signatory trader
     observer operator
+    ensure amountIn > 0.0 && minOut > 0.0 && instrumentIn /= instrumentOut && not (T.isEmpty requestId)
 
     -- Called by the pool while it settles the swap: create the trader's
     -- receipt for exactly `amountOut`, which must meet the trader's minimum.
@@ -135,46 +174,8 @@ template SwapRequest
 -- Liquidity
 ------------
 
--- | A provider's order to lock `amountA` and `amountB` for the pool until
--- `termEnd`. The funds stay in the provider's account the whole time.
-template DepositOrder
-  with
-    provider : Party
-    operator : Party
-    poolId : Text
-    requestId : Text
-    instrumentA : H.InstrumentId
-    amountA : Decimal
-    instrumentB : H.InstrumentId
-    amountB : Decimal
-    termEnd : Time
-  where
-    signatory provider
-    ensure amountA > 0.0 && amountB > 0.0 && instrumentA /= instrumentB && not (T.isEmpty requestId)
-
-    choice DepositOrder_Place : ContractId DepositRequest
-      with
-        factoryA : ContractId AI.AllocationFactory
-        holdingsA : [ContractId H.Holding]
-        extraArgsA : ExtraArgs
-        factoryB : ContractId AI.AllocationFactory
-        holdingsB : [ContractId H.Holding]
-        extraArgsB : ExtraArgs
-        requestedAt : Time
-      controller provider
-      do
-        let lock instrument amount factory holdings extraArgs =
-              allocate instrument.admin factory AI.AllocationFactory_Allocate with
-                settlement = poolSettlement operator poolId
-                allocation = providerFunding provider instrument amount termEnd
-                requestedAt
-                inputHoldingCids = holdings
-                extraArgs
-                actors = [provider]
-        allocationA <- lock instrumentA amountA factoryA holdingsA extraArgsA
-        allocationB <- lock instrumentB amountB factoryB holdingsB extraArgsB
-        create DepositRequest with ..
-
+-- | A provider's request to open a position with funds locked in their own
+-- account until `termEnd`.
 template DepositRequest
   with
     provider : Party
@@ -191,6 +192,7 @@ template DepositRequest
   where
     signatory provider
     observer operator
+    ensure amountA > 0.0 && amountB > 0.0 && instrumentA /= instrumentB && not (T.isEmpty requestId)
 
     -- Consumed by the pool when it opens the position.
     choice DepositRequest_Take : DepositRequest

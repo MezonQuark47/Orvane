@@ -4,8 +4,8 @@
 
 import { AnimatePresence, motion } from 'motion/react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useOrvane } from '../ledger/OrvaneProvider.tsx'
-import { fmt } from './bits.tsx'
+import { useDex } from '../ledger/dex.tsx'
+import { shortParty } from './bits.tsx'
 import { explain, type Explained } from './errors.ts'
 
 export type ActivityStatus = 'pending' | 'done' | 'failed'
@@ -65,15 +65,14 @@ function load(key: string): Activity[] {
   }
 }
 
-const LEGACY_TITLES = { swap: 'Swap', deposit: 'Add liquidity', withdraw: 'Withdraw liquidity' } as const
-
 export function ActivityProvider({ children }: { children: ReactNode }) {
-  const { config, persona, tx } = useOrvane()
-  const key = config ? `orvane.activity.${config.network ?? 'sandbox'}` : undefined
+  const { config, party } = useDex()
+  // one history per network and wallet party, kept in this browser only
+  const key = config && party ? `orvane.activity.${config.network}.${party}` : undefined
   const [items, setItems] = useState<Activity[]>([])
   const [open, setOpen] = useState(false)
   const who = useRef<string | undefined>(undefined)
-  who.current = persona?.name
+  who.current = party ? shortParty(party) : undefined
 
   // load once the network is known, and only save into the list we loaded
   const loadedKey = useRef<string | undefined>(undefined)
@@ -118,28 +117,6 @@ export function ActivityProvider({ children }: { children: ReactNode }) {
   )
   const dismiss = useCallback((id: string) => patch(id, { seen: true }), [patch])
   const clear = useCallback(() => setItems((xs) => xs.filter((a) => a.status === 'pending')), [])
-
-  // the legacy pool's swap/deposit/withdraw run through the provider's own tx state
-  const legacy = useRef<string | undefined>(undefined)
-  useEffect(() => {
-    if (!tx.kind) return
-    if (tx.phase === 'signing') {
-      legacy.current = start(LEGACY_TITLES[tx.kind])
-      return
-    }
-    const id = legacy.current
-    if (!id) return
-    if (tx.phase === 'settling') update(id, { detail: 'Signed. The operator is settling it…' })
-    if (tx.phase === 'done') {
-      const r = tx.receipt
-      done(id, { detail: r ? `${fmt(+r.amountIn)} ${r.symbolIn} → ${fmt(+r.amountOut, 4)} ${r.symbolOut}` : 'Settled' })
-      legacy.current = undefined
-    }
-    if (tx.phase === 'error') {
-      fail(id, tx.message)
-      legacy.current = undefined
-    }
-  }, [tx.phase, tx.kind, tx.receipt, tx.message, start, update, done, fail])
 
   const actions = useMemo<ActivityActions>(() => ({ start, update, done, fail, track }), [start, update, done, fail, track])
   const feed = useMemo<ActivityFeed>(() => ({ items, dismiss, clear, open, setOpen }), [items, dismiss, clear, open])
@@ -247,7 +224,7 @@ const ago = (t: number, now: number) => {
 
 export function ActivityDock({ hidden }: { hidden?: boolean }) {
   const { items, open, setOpen, clear } = useFeed()
-  const { config } = useOrvane()
+  const { config } = useDex()
   const pending = items.filter((a) => a.status === 'pending').length
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -291,7 +268,7 @@ export function ActivityDock({ hidden }: { hidden?: boolean }) {
               <header className="drawer-head">
                 <div>
                   <h2>Activity</h2>
-                  <p className="muted small">What you signed from this browser on {config?.network === 'localnet' ? 'Canton LocalNet' : 'the local sandbox'}.</p>
+                  <p className="muted small">What you signed from this browser on {config?.network === 'localnet' ? 'Canton LocalNet' : config?.network ?? 'this network'}.</p>
                 </div>
                 <button className="toast-x" onClick={() => setOpen(false)} aria-label="Close">
                   <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden>

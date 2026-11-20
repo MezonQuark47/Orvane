@@ -1,43 +1,41 @@
+import * as Dialog from '@radix-ui/react-dialog'
 import * as Tooltip from '@radix-ui/react-tooltip'
 import { LayoutGroup, motion } from 'motion/react'
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
-import { OrvaneProvider, useOrvane } from './ledger/OrvaneProvider.tsx'
+import { toNumber } from '../../shared/decimal.ts'
+import { DexProvider, useDex } from './ledger/dex.tsx'
+import { GATEWAY_URL } from './ledger/gateway.ts'
+import type { WalletKind } from './ledger/wallet.ts'
 import { ActivityDock, ActivityProvider, Toasts } from './ui/activity.tsx'
-import { PageSkeleton } from './ui/bits.tsx'
-import Holdings from './pages/Holdings.tsx'
+import { PageSkeleton, shortParty } from './ui/bits.tsx'
+import { errorText } from './ui/errors.ts'
 import Landing from './pages/Landing.tsx'
-import Lens from './pages/Lens.tsx'
 import Liquidity from './pages/Liquidity.tsx'
-import LiquidityCn from './pages/LiquidityCn.tsx'
-import Payments from './pages/Payments.tsx'
-import Lending from './pages/Lending.tsx'
-import LendingCn from './pages/LendingCn.tsx'
-import Trade from './pages/Trade.tsx'
-import ExchangeTrade from './pages/ExchangeTrade.tsx'
+import Portfolio from './pages/Portfolio.tsx'
+import Privacy from './pages/Privacy.tsx'
+import Swap from './pages/Swap.tsx'
 
 const Vault = lazy(() => import('./three/Vault.tsx'))
 import type { VaultScene } from './three/Vault.tsx'
 
 const TABS = [
-  { key: 'trade', label: 'Trade' },
-  { key: 'liquidity', label: 'Liquidity' },
-  { key: 'payments', label: 'Payments' },
-  { key: 'lending', label: 'Lending' },
-  { key: 'lens', label: 'Privacy lens' },
-  { key: 'holdings', label: 'Holdings' },
+  { key: 'swap', label: 'Swap', scene: 'trade' },
+  { key: 'liquidity', label: 'Liquidity', scene: 'liquidity' },
+  { key: 'portfolio', label: 'Portfolio', scene: 'holdings' },
+  { key: 'privacy', label: 'Privacy', scene: 'lens' },
 ] as const
 // 'home' is the landing; it has no tab of its own, the wordmark leads there
-type Tab = (typeof TABS)[number]['key'] | 'home'
+export type Tab = (typeof TABS)[number]['key'] | 'home'
 
 export default function App() {
   return (
-    <OrvaneProvider>
+    <DexProvider>
       <ActivityProvider>
         <Tooltip.Provider delayDuration={200}>
           <Shell />
         </Tooltip.Provider>
       </ActivityProvider>
-    </OrvaneProvider>
+    </DexProvider>
   )
 }
 
@@ -47,7 +45,7 @@ function readTab(): Tab {
 }
 
 function Shell() {
-  const { status, history, pool, pulse, persona, config } = useOrvane()
+  const { status, config, pools, pulse, mine } = useDex()
   const [tab, setTab] = useState<Tab>(readTab)
   useEffect(() => {
     const on = () => setTab(readTab())
@@ -72,17 +70,22 @@ function Shell() {
     setTab(t)
   }
 
-  // Orb weights: each side's reserve relative to the pool's first seeded state.
+  // Orb weights: each side of the pool against its first recorded fill.
+  const live = config ? pools.get(config.pools[0]?.poolId ?? '') : undefined
   const weights = useMemo(() => {
-    const seed = history[0]
-    if (!pool || !seed) return { a: 1, b: 1 }
-    return { a: pool.reserveA / seed.reserveA, b: pool.reserveB / seed.reserveB }
-  }, [pool, history])
+    const first = live?.recent[0]
+    if (!live || !first || live.reserveA === 0n) return { a: 1, b: 1 }
+    const price = toNumber(live.reserveB) / toNumber(live.reserveA)
+    return { a: Math.min(1.4, Math.max(0.6, first.price / price)), b: Math.min(1.4, Math.max(0.6, price / first.price)) }
+  }, [live])
+
+  const scene: VaultScene = tab === 'home' ? 'hero' : TABS.find((t) => t.key === tab)!.scene
+  const incoming = mine.incoming.length
 
   return (
     <>
       <Suspense fallback={null}>
-        <Vault weightA={weights.a} weightB={weights.b} pulse={pulse} scene={(tab === 'home' ? 'hero' : tab) as VaultScene} />
+        <Vault weightA={weights.a} weightB={weights.b} pulse={pulse ? { id: pulse, from: 'CCx' } : null} scene={scene} />
       </Suspense>
       <div className="vignette" aria-hidden />
 
@@ -108,11 +111,12 @@ function Shell() {
                 <button key={t.key} className={tab === t.key ? 'on' : ''} onClick={() => go(t.key)} aria-current={tab === t.key ? 'page' : undefined}>
                   {tab === t.key && <motion.span className="tab-bg" layoutId="tab-bg" transition={{ type: 'spring', stiffness: 380, damping: 32 }} />}
                   <span className="tab-label">{t.label}</span>
+                  {t.key === 'portfolio' && incoming > 0 && <span className="tab-badge">{incoming}</span>}
                 </button>
               ))}
             </nav>
           </LayoutGroup>
-          <PersonaSwitch />
+          <WalletButton />
         </header>
 
         {status === 'offline' && tab !== 'home' ? (
@@ -121,7 +125,7 @@ function Shell() {
           <main className={tab === 'home' ? 'is-landing' : undefined}>
             {/* A brass light sweeps the top edge on every section change. */}
             <motion.span
-              key={`sweep-${tab}-${persona?.key ?? ''}`}
+              key={`sweep-${tab}`}
               className="sweep"
               aria-hidden
               initial={{ scaleX: 0, opacity: 1 }}
@@ -130,7 +134,7 @@ function Shell() {
             />
             {/* Enter-only transition: a keyed remount can't get stuck waiting on an exit. */}
             <motion.div
-              key={`${tab}-${persona?.key ?? ''}-${tab !== 'home' && status}`}
+              key={`${tab}-${tab !== 'home' && status}`}
               initial={{ opacity: 0, y: 14, filter: 'blur(6px)' }}
               animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
               transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
@@ -139,12 +143,10 @@ function Shell() {
               {tab !== 'home' && status === 'connecting' && <PageSkeleton />}
               {status === 'ready' && (
                 <>
-                  {tab === 'trade' && (config?.exchange ? <ExchangeTrade /> : <Trade />)}
-                  {tab === 'liquidity' && (config?.exchange ? <LiquidityCn /> : <Liquidity />)}
-                  {tab === 'payments' && <Payments />}
-                  {tab === 'lending' && (config?.exchange?.creditMarketId ? <LendingCn /> : <Lending />)}
-                  {tab === 'lens' && <Lens />}
-                  {tab === 'holdings' && <Holdings />}
+                  {tab === 'swap' && <Swap />}
+                  {tab === 'liquidity' && <Liquidity />}
+                  {tab === 'portfolio' && <Portfolio />}
+                  {tab === 'privacy' && <Privacy />}
                 </>
               )}
             </motion.div>
@@ -152,60 +154,134 @@ function Shell() {
         )}
 
         <footer className="foot">
-          <span>Daml · Canton Network</span>
+          <span>Daml · Canton Network · token standard V2</span>
           <span className="sep" />
-          <span>{status === 'ready' ? `Connected to ${config?.network === 'localnet' ? 'Canton LocalNet' : 'local sandbox'}` : status === 'connecting' ? 'Connecting…' : 'Ledger offline'}</span>
+          <span>{status === 'ready' ? `Connected to ${networkName(config?.network)}` : status === 'connecting' ? 'Connecting…' : 'Operator offline'}</span>
           <span className={`live ${status}`} aria-hidden />
         </footer>
       </div>
 
       <Toasts />
       <ActivityDock hidden={tab === 'home' || status !== 'ready'} />
+      <ConnectDialog />
     </>
   )
 }
 
-function PersonaSwitch() {
-  const { config, persona, setPersona } = useOrvane()
-  if (!config) return <div className="personas" />
-  return (
-    <div className="personas" role="radiogroup" aria-label="Act as">
-      <span className="act-as">Act as</span>
-      {config.personas.map((p, i) => (
-        <Tooltip.Root key={p.key}>
-          {i > 0 && p.group !== config.personas[i - 1].group && <span className="persona-sep" aria-hidden />}
+const networkName = (n?: string) => (n === 'localnet' ? 'Canton LocalNet' : n === 'devnet' ? 'Canton DevNet' : n === 'mainnet' ? 'Canton MainNet' : n ?? 'the network')
+
+function WalletButton() {
+  const { wallet, disconnect } = useDex()
+  if (wallet.phase === 'connected') {
+    return (
+      <div className="wallet">
+        <Tooltip.Root>
           <Tooltip.Trigger asChild>
-            <button
-              role="radio"
-              aria-checked={persona?.key === p.key}
-              aria-label={`${p.name}, ${p.role}`}
-              className={`avatar av-${p.key} ${p.group === 'business' ? 'org' : ''} ${persona?.key === p.key ? 'on' : ''}`}
-              onClick={() => setPersona(p.key)}
-            >
-              {personaGlyph(p.key, p.name)}
-            </button>
+            <span className="wallet-party mono">
+              <span className="wallet-dot" aria-hidden /> {shortParty(wallet.session.party)}
+            </span>
           </Tooltip.Trigger>
           <Tooltip.Portal>
             <Tooltip.Content className="tip" sideOffset={8}>
-              <strong>{p.name}</strong> · {p.role}
+              Signed in with {wallet.session.name}. Orvane never sees your keys.
               <Tooltip.Arrow className="tip-arrow" />
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
-      ))}
+        <button className="link small" onClick={() => disconnect()}>
+          Disconnect
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="wallet">
+      <button className="wallet-connect" onClick={() => window.dispatchEvent(new CustomEvent('orvane:connect'))} disabled={wallet.phase === 'connecting'}>
+        {wallet.phase === 'connecting' ? 'Connecting…' : 'Connect wallet'}
+      </button>
     </div>
   )
 }
 
-export const personaGlyph = (key: string, name: string) => (key === 'auditor' ? '§' : name[0])
+// The wallets that speak CIP-0103 on this network.
+function ConnectDialog() {
+  const { config, connect, wallet } = useDex()
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState<string>()
+  useEffect(() => {
+    const on = () => {
+      setError(undefined)
+      setOpen(true)
+    }
+    window.addEventListener('orvane:connect', on)
+    return () => window.removeEventListener('orvane:connect', on)
+  }, [])
+  useEffect(() => {
+    if (wallet.phase === 'connected') setOpen(false)
+  }, [wallet.phase])
+
+  const localnet = config?.network === 'localnet'
+  const options: Array<{ kind: WalletKind; name: string; detail: string; available: boolean; note?: string }> = [
+    {
+      kind: 'gateway',
+      name: 'Wallet Gateway',
+      detail: 'The Canton Foundation’s reference wallet. Runs next to LocalNet.',
+      available: localnet,
+      note: localnet ? GATEWAY_URL.replace(/\/api.*$/, '') : 'for LocalNet',
+    },
+    {
+      kind: 'loop',
+      name: 'Loop',
+      detail: 'Five North’s wallet for Canton DevNet and MainNet.',
+      available: !localnet,
+      note: localnet ? 'on DevNet and MainNet' : undefined,
+    },
+  ]
+  const pick = async (kind: WalletKind) => {
+    setError(undefined)
+    try {
+      await connect(kind)
+    } catch (e) {
+      setError(errorText(e))
+    }
+  }
+
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="dialog-overlay" />
+        <Dialog.Content className="dialog wallet-dialog">
+          <Dialog.Title>Connect a wallet</Dialog.Title>
+          <Dialog.Description className="muted">
+            You sign every action in your wallet. Orvane reads only your own contracts, through the wallet, and never holds your keys.
+          </Dialog.Description>
+          <ul className="wallet-options">
+            {options.map((o) => (
+              <li key={o.kind}>
+                <button disabled={!o.available || wallet.phase === 'connecting'} onClick={() => pick(o.kind)}>
+                  <span className="wallet-name">{o.name}</span>
+                  <span className="muted small">{o.detail}</span>
+                  {o.note && <span className="wallet-note mono small">{o.note}</span>}
+                  {wallet.phase === 'connecting' && wallet.kind === o.kind && <span className="wallet-note small">waiting for the wallet…</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {error && <p className="tx-error">{error}</p>}
+          <Dialog.Close className="link small dialog-close">Close</Dialog.Close>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
+}
 
 function Offline() {
   return (
     <main className="offline">
       <motion.div className="panel" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
         <h2>The vault is closed.</h2>
-        <p className="muted">Start the local Canton sandbox and the operator, then this page connects by itself.</p>
-        <pre className="mono small">{`./scripts/sandbox.ps1\ncd operator; npm start`}</pre>
+        <p className="muted">Start LocalNet and the Orvane operator, then this page connects by itself.</p>
+        <pre className="mono small">{`./scripts/localnet.ps1 up\nnode operator/index.ts`}</pre>
       </motion.div>
     </main>
   )
