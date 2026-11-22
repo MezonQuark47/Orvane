@@ -348,3 +348,14 @@
 .bridge-form .ghost {
   justify-self: start;
 }
+.warn-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+.warn-actions .ghost {
+  color: var(--amber);
+  border-color: rgba(227, 178, 60, 0.45);
+  text-decoration: none;
+}

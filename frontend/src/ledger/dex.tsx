@@ -303,7 +303,18 @@ export function DexProvider({ children }: { children: ReactNode }) {
         DEX.RequestRejected,
         DEX.PositionClosed,
       ])) : Promise.resolve([] as Contract<unknown>[]),
-      ledger.queryInterface<HoldingWire>(party, HOLDING_V2),
+      // a wallet that reports balances itself (Loop) is asked directly; it
+      // knows its own tokens best
+      session.balances
+        ? session.balances().then(
+            (bs) =>
+              bs.flatMap((b, n) => [
+                { contractId: `wallet:${n}:free`, templateId: '', view: { account: { owner: party }, instrumentId: b.instrument, amount: b.free, lock: null } },
+                { contractId: `wallet:${n}:locked`, templateId: '', view: { account: { owner: party }, instrumentId: b.instrument, amount: b.locked, lock: {} } },
+              ]),
+            () => ledger.queryInterface<HoldingWire>(party, HOLDING_V2),
+          )
+        : ledger.queryInterface<HoldingWire>(party, HOLDING_V2),
       safe(ledger.queryInterface<InstructionWire>(party, TRANSFER_INSTRUCTION_V2)),
       safe(ledger.queryInterface<AllocationWire>(party, ALLOCATION_V2)),
     ])
@@ -319,7 +330,7 @@ export function DexProvider({ children }: { children: ReactNode }) {
     const newest = <T,>(xs: Contract<T>[]) => [...xs].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
     return {
       holdings: holdings
-        .filter((h) => h.view.account.owner === party)
+        .filter((h) => h.view.account.owner === party && Number(h.view.amount) > 0)
         .map((h) => ({ cid: h.contractId, instrument: h.view.instrumentId, amount: dec(h.view.amount), locked: !!h.view.lock })),
       positions: of<LpPosition>('LpPosition').filter((p) => p.payload.provider === party),
       receipts: newest(of<SwapReceipt>('SwapReceipt').filter((r) => r.payload.trader === party)),

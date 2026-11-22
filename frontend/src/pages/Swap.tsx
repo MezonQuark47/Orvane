@@ -104,11 +104,21 @@ export default function Swap() {
     return () => clearInterval(id)
   }, [])
 
-  // Loop tells us whether the wallet can receive the output in one step
+  // Loop tells us whether the wallet can receive the output in one step.
+  // Asked again every few seconds, so turning it on in Loop shows up here
+  // without a reload.
   useEffect(() => {
     setAccount(undefined)
     if (wallet.phase !== 'connected' || !wallet.session.account) return
-    wallet.session.account().then(setAccount, () => setAccount(undefined))
+    const ask = wallet.session.account
+    let alive = true
+    const read = () => ask().then((a) => alive && setAccount(a), () => {})
+    read()
+    const id = setInterval(read, 5_000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
   }, [wallet])
 
   const pool = sell && buy ? market.poolFor(sell, buy) : undefined
@@ -293,7 +303,22 @@ export default function Swap() {
             )}
             {belowMin && <p className="tx-warn">Cantex fills swaps of at least {fmt(toNumber(ccMin), 0)} CC.</p>}
             {party && !canReceive && buy && (
-              <p className="tx-warn">Your wallet can't receive {buy.symbol} in one step yet. Turn on receiving for {buy.symbol} (a transfer pre-approval) in your wallet first.</p>
+              <div className="tx-warn">
+                Your wallet can't receive {buy.symbol} in one step yet. Cantex needs that to send the swap back to you.
+                {wallet.phase === 'connected' && wallet.session.walletUrl ? (
+                  <>
+                    {' '}Turn on receiving for {buy.symbol} (a transfer pre-approval) in {wallet.session.name}; this page picks it up by itself.
+                    <div className="warn-actions">
+                      <a className="ghost small" href={wallet.session.walletUrl} target="_blank" rel="noreferrer">
+                        Open {wallet.session.name} ↗
+                      </a>
+                      <span className="muted small">checking every few seconds…</span>
+                    </div>
+                  </>
+                ) : (
+                  <> Turn on receiving for {buy.symbol} (a transfer pre-approval) in your wallet first.</>
+                )}
+              </div>
             )}
 
             {!party ? (
@@ -478,7 +503,7 @@ function History({ party, pendingOut }: { party: string; pendingOut: number }) {
         <ul className="receipt-list history">
           <AnimatePresence initial={false}>
             {rows.slice(0, 8).map((r) => (
-              <motion.li key={r.id} layout initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} className={r.status === 'failed' ? 'warn' : undefined}>
+              <motion.li key={r.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={r.status === 'failed' ? 'warn' : undefined}>
                 <span className="mono">
                   {fmt(Number(r.sell.amount), 4)} {sym(r.sell)} → {r.received ? fmt(Number(r.received), 6) : '…'} {sym(r.quoted)}
                 </span>

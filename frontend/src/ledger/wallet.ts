@@ -41,6 +41,10 @@ export interface WalletSession {
    */
   transfer?: (recipient: string, amount: string, instrument: Instrument, memo: string) => Promise<void>
   account?: () => Promise<LoopAccount>
+  /** balances as the wallet itself reports them (Loop), per token: free and locked */
+  balances?: () => Promise<Array<{ instrument: Instrument; free: string; locked: string }>>
+  /** the wallet's own web app, where settings like receiving pre-approvals live */
+  walletUrl?: string
   bridgeUsdcx?: (ethereumAddress: string, amount: string) => Promise<void>
   disconnect: () => Promise<void>
 }
@@ -121,6 +125,7 @@ export const connectExtension = () => connectWith('extension', 'Browser wallet',
 // Loop prepares for any token.
 interface LoopNative {
   getAccount(): Promise<{ has_preapproval?: boolean; utility_preapproval_admins?: string[]; usdc_bridge_access?: LoopAccount['usdcBridge'] }>
+  getHolding(): Promise<Array<{ instrument_id: { admin: string; id: string }; total_unlocked_coin: string; total_locked_coin: string }>>
   transfer(recipient: string, amount: string, instrument: { instrument_admin: string; instrument_id: string }, options: { memo: string; executionMode: 'wait'; requestTimeout?: number; message?: string }): Promise<unknown>
 }
 
@@ -150,6 +155,7 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
   }
   return {
     ...s,
+    walletUrl: network === 'mainnet' ? 'https://wallet.looptech.io' : 'https://wallet.testnet.looptech.io',
     transfer: async (recipient, amount, instrument, memo) => {
       await native().transfer(recipient, amount, { instrument_admin: instrument.admin, instrument_id: instrument.id }, {
         memo,
@@ -157,6 +163,10 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
         requestTimeout: 180_000,
         message: `Swap through Orvane: ${amount} ${instrument.id}`,
       })
+    },
+    balances: async () => {
+      const rows = await native().getHolding()
+      return rows.map((h) => ({ instrument: { admin: h.instrument_id.admin, id: h.instrument_id.id }, free: h.total_unlocked_coin, locked: h.total_locked_coin }))
     },
     account: async () => {
       const a = await native().getAccount()
