@@ -1,5 +1,5 @@
 /* The DEX's own pieces: the wallet, the term picker, request rows, the
-   privacy proof. Same tokens and materials as the rest of the vault. */
+   history. Same tokens and materials as the rest of the vault. */
 
 /* ---------------------------------------------------------------- wallet */
 
@@ -227,31 +227,7 @@
   word-break: break-all;
 }
 
-/* ---------------------------------------------------------------- privacy */
-
-.lens-grid.two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.lens-empty {
-  display: grid;
-  place-items: center;
-  flex: 1;
-}
-.lens-empty .primary {
-  width: auto;
-  padding-inline: 22px;
-}
-.proof {
-  margin-top: 18px;
-}
-.proof .details dd {
-  color: var(--verdigris);
-}
-
 @media (max-width: 860px) {
-  .lens-grid.two {
-    grid-template-columns: 1fr;
-  }
   .wallet .link {
     display: none;
   }

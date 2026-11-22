@@ -395,103 +395,6 @@ main.is-landing {
   box-shadow: 0 0 16px rgba(99, 181, 158, 0.6);
 }
 
-/* ---------------------------------------------------------------- privacy */
-
-.ln-privacy {
-  position: relative;
-  min-height: 120vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16vh 0;
-}
-.landing .vault-stage.ln-privacy-stage {
-  position: absolute;
-  top: 6vh;
-  left: 6%;
-  width: 88%;
-  height: 70vh;
-}
-.ln-privacy-inner {
-  position: relative;
-  width: min(1000px, 100%);
-  margin-top: 26vh;
-}
-.ln-matrix {
-  margin-top: 46px;
-  padding: 10px 26px;
-  border-radius: 24px;
-  background: linear-gradient(180deg, rgba(16, 18, 24, 0.7), rgba(10, 11, 15, 0.62));
-  border: 1px solid var(--line);
-  backdrop-filter: blur(22px) saturate(140%);
-  box-shadow: 0 40px 120px -40px rgba(0, 0, 0, 0.9);
-}
-.ln-mrow {
-  display: grid;
-  grid-template-columns: 1.6fr repeat(5, 1fr);
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-}
-.ln-mrow:last-child {
-  border-bottom: 0;
-}
-.ln-mrow > span {
-  padding: 18px 8px;
-  text-align: center;
-  transition: background 0.3s;
-}
-.ln-mrow.head > span {
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--faint);
-  cursor: default;
-}
-.ln-mrow.head > span.hot {
-  color: var(--brass);
-}
-.ln-mrow .what {
-  text-align: left;
-  font-size: 15px;
-}
-.ln-mrow .cell i {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1px solid var(--line-2);
-  transition: transform 0.4s var(--ease);
-}
-.ln-mrow .cell.on i {
-  border: 0;
-  background: radial-gradient(circle at 35% 30%, var(--brass-hi), var(--brass) 60%, var(--brass-lo));
-  box-shadow: 0 0 14px rgba(207, 169, 96, 0.7);
-}
-.ln-mrow .cell.hot {
-  background: rgba(207, 169, 96, 0.06);
-}
-.ln-mrow .cell.hot.on i {
-  transform: scale(1.35);
-}
-.ln-note {
-  margin: 26px auto 0;
-  max-width: 600px;
-  text-align: center;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.8;
-  color: var(--faint);
-}
-.ln-inline {
-  color: var(--brass);
-  font-family: var(--mono);
-  font-size: 12px;
-}
-.ln-inline:hover {
-  color: var(--brass-hi);
-}
-
 /* ---------------------------------------------------------------- finale */
 
 .ln-finale {
@@ -549,20 +452,6 @@ main.is-landing {
   .ln-numeral {
     top: -0.4em;
     font-size: 160px;
-  }
-  .ln-matrix {
-    padding: 6px 12px;
-  }
-  .ln-mrow {
-    grid-template-columns: 1.3fr repeat(5, 1fr);
-  }
-  .ln-mrow .what {
-    font-size: 12px;
-  }
-  .ln-mrow.head > span {
-    font-size: 8px;
-    letter-spacing: 0.02em;
-    padding: 12px 2px;
   }
   .landing .vault-stage.ln-finale-stage {
     left: 0;

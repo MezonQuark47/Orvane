@@ -1,6 +1,6 @@
 // The landing: one long camera move through the vault. Each chapter reserves
 // a stage and the vault flies from one to the next as you scroll, changing its
-// pose on the way: hero, swap, liquidity, privacy, and back.
+// pose on the way: hero, swap, liquidity, and back.
 
 import { motion } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -12,7 +12,7 @@ import { VaultStage, type StageScene } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
 import { fmtCompact } from '../ui/bits.tsx'
 
-type Go = (tab: 'swap' | 'liquidity' | 'privacy') => void
+type Go = (tab: 'swap' | 'liquidity') => void
 
 const ease = [0.22, 1, 0.36, 1] as const
 const REPO = 'https://github.com/mezonquark47/orvane'
@@ -24,7 +24,6 @@ export default function Landing({ go }: { go: Go }) {
       {(NETWORK.cantex ? SWAP_CHAPTERS : CHAPTERS).map((c, i) => (
         <Chapter key={c.id} chapter={c} flip={i % 2 === 1} go={go} />
       ))}
-      <Privacy go={go} />
       <Finale go={go} />
     </div>
   )
@@ -54,7 +53,7 @@ function Hero({ go }: { go: Go }) {
     <section className="ln-hero">
       <VaultStage scene="hero" className="ln-hero-stage" />
       <motion.p className="ln-kicker" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, ease, delay: 0.2 }}>
-        <span className="ln-pip" /> {NETWORK.cantex ? 'Swaps on the Canton Network, from your own wallet' : 'The private exchange on the Canton Network'}
+        <span className="ln-pip" /> {NETWORK.cantex ? 'Swaps on the Canton Network, from your own wallet' : 'The exchange on the Canton Network'}
       </motion.p>
       <h1 className="ln-mega">
         {HEADLINE.map((line, li) => (
@@ -76,16 +75,16 @@ function Hero({ go }: { go: Go }) {
       <motion.div className="ln-hero-foot" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, ease, delay: 1.1 }}>
         <p className="ln-lede">
           {NETWORK.cantex
-            ? "Any token Cantex lists, straight from your wallet into Canton's deepest pools. Orvane prices every swap itself and re-checks it the moment before you sign. No account, no fee, nothing kept."
-            : 'Swap Canton Coin in one atomic transaction that only you and the operator can read. Provide liquidity without handing it to anyone: it stays in your account, and comes back on its own at the end of its term.'}
+            ? `Any token Cantex lists, straight from your wallet into Canton's deepest pools. Orvane prices every swap itself and re-checks it the moment before you sign. No account, no fee.${NETWORK.proxy ? '' : ' Nothing kept.'}`
+            : 'Swap Canton Coin in one atomic transaction. Provide liquidity without handing it to anyone: it stays in your account, and comes back on its own at the end of its term.'}
         </p>
         <div className="ln-ctas">
           <button className="ln-btn" onClick={() => go('swap')}>
             Enter the vault <Arrow />
           </button>
-          <button className="ln-ghost" onClick={() => document.getElementById('privacy')?.scrollIntoView({ behavior: 'smooth' })}>
-            How the privacy works
-          </button>
+          <a className="ln-ghost" href={REPO} target="_blank" rel="noreferrer">
+            Read the code ↗
+          </a>
         </div>
       </motion.div>
       <Ticker />
@@ -409,81 +408,6 @@ function Chapter({ chapter: c, flip, go }: { chapter: ChapterData; flip: boolean
         <button className="ln-ghost ln-open" onClick={() => go(c.tab)}>
           {c.open} <Arrow />
         </button>
-      </motion.div>
-    </section>
-  )
-}
-
-// ---------------------------------------------------------------- privacy
-
-const WHO = NETWORK.cantex ? ['You', 'Orvane', 'Cantex', 'Token registry', 'Everyone else'] : ['You', 'Other traders', 'Other LPs', 'Operator', 'Everyone else']
-const WHAT: [string, boolean[]][] = NETWORK.cantex
-  ? [
-      ['That you swapped, and how much', [true, false, true, true, false]],
-      ['The rest of your wallet', [true, false, false, false, false]],
-      ['Your swap history', [true, false, true, false, false]],
-      ['Pool reserves and prices', [true, true, true, true, true]],
-    ]
-  : [
-      ['That you traded, and how much', [true, false, false, true, false]],
-      ['Your liquidity position', [true, false, false, true, false]],
-      ['Who was on the other side', [false, false, false, true, false]],
-      ['Pool reserves and price', [true, true, true, true, true]],
-    ]
-
-function Privacy({ go }: { go: Go }) {
-  const [col, setCol] = useState<number | null>(null)
-  return (
-    <section className="ln-privacy" id="privacy">
-      <VaultStage scene="liquidity" className="ln-privacy-stage" />
-      <motion.div
-        className="ln-privacy-inner"
-        initial={{ opacity: 0, y: 40 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ amount: 0.35, once: true }}
-        transition={{ duration: 1, ease }}
-      >
-        <p className="ln-kicker center">
-          <span className="ln-pip" /> Sub-transaction privacy
-        </p>
-        <h2 className="ln-title center">
-          Everyone shares the ledger.
-          <br />
-          <em>Nobody shares the view.</em>
-        </h2>
-        <div className="ln-matrix" onMouseLeave={() => setCol(null)}>
-          <div className="ln-mrow head">
-            <span />
-            {WHO.map((w, i) => (
-              <span key={w} className={col === i ? 'hot' : ''} onMouseEnter={() => setCol(i)}>
-                {w}
-              </span>
-            ))}
-          </div>
-          {WHAT.map(([what, sees]) => (
-            <div className="ln-mrow" key={what}>
-              <span className="what">{what}</span>
-              {sees.map((s, i) => (
-                <span
-                  key={i}
-                  className={`cell ${s ? 'on' : ''} ${col === i ? 'hot' : ''}`}
-                  onMouseEnter={() => setCol(i)}
-                  aria-label={`${WHO[i]}: ${s ? 'sees it' : 'does not see it'}`}
-                >
-                  <i />
-                </span>
-              ))}
-            </div>
-          ))}
-        </div>
-        <p className="ln-note">
-          {NETWORK.cantex
-            ? 'On Canton a party only receives the parts of a transaction it is part of. Your swap is a transfer from your wallet to Cantex; Orvane is not in it and keeps no record of it.'
-            : 'On Canton a party only receives the parts of a transaction it is a stakeholder in, and Orvane routes every leg through the operator, so traders and providers never meet. As with any token, an asset’s registry also sees transfers of its own asset.'}{' '}
-          <button className="ln-inline" onClick={() => go('privacy')}>
-            See it live on your own node →
-          </button>
-        </p>
       </motion.div>
     </section>
   )

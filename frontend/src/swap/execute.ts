@@ -4,7 +4,8 @@
 //      slippage limit) and against Orvane's own pricing from the pools
 //   2. send the sell token to Cantex's swap party, with the buy token as memo
 //      (Loop prepares the transfer itself; other wallets get one built from
-//      the token's registry)
+//      the token's registry). Where Orvane's proxy is set up, the same
+//      transfer runs through it so Orvane's party confirms it (shared/proxy.ts)
 //   3. watch the user's own balance until the output arrives
 //
 // Cantex fills at the pool price when the transfer arrives and its quote is
@@ -15,6 +16,7 @@ import { sameInstrument, type Instrument, type PoolState, type Quote, type Cante
 import { checkQuote, guardFreshQuote } from '../../../shared/quote.ts'
 import { basicAccount } from '../../../shared/dex.ts'
 import { dedupeDisclosed } from '../../../shared/registry.ts'
+import { loadProxy, ProxyUnavailable, type ProxyInfo } from '../../../shared/proxy.ts'
 import type { DexState, Mine } from '../ledger/dex.tsx'
 import { NETWORK } from '../ledger/network.ts'
 import { recordSwap, updateSwap } from './history.ts'
@@ -33,6 +35,10 @@ export interface SwapResult {
 }
 
 export type Stage = 'checking' | 'signing' | 'settling'
+
+// the proxy settings for this network, fetched once
+let proxyInfo: Promise<ProxyInfo | undefined> | undefined
+const proxy = () => (proxyInfo ??= loadProxy(NETWORK.proxy).catch(() => undefined))
 
 const freeOf = (m: Mine, i: Instrument) => m.holdings.filter((h) => !h.locked && sameInstrument(h.instrument, i)).reduce((s, h) => s + h.amount, ZERO)
 
@@ -70,8 +76,22 @@ export async function executeSwap(
   const id = recordSwap(dex.party!, { sell: seen.sell, quoted: fresh.returned, at: Date.now() })
   opts.onStage('signing')
   try {
-    if (session.transfer) await session.transfer(swapParty, seen.sell.amount, sell, fresh.memo)
-    else await registryTransfer(dex, session.party, swapParty, seen.sell.amount, sell, fresh.memo)
+    const via = session.transferVia ? await proxy() : undefined
+    let route: 'orvane' | 'direct' = 'direct'
+    if (via && session.transferVia) {
+      try {
+        await session.transferVia(via, swapParty, seen.sell.amount, sell, fresh.memo)
+        route = 'orvane'
+      } catch (e) {
+        // the user's node cannot run the proxy; nothing was signed, so send it plainly
+        if (!(e instanceof ProxyUnavailable)) throw e
+      }
+    }
+    if (route === 'direct') {
+      if (session.transfer) await session.transfer(swapParty, seen.sell.amount, sell, fresh.memo)
+      else await registryTransfer(dex, session.party, swapParty, seen.sell.amount, sell, fresh.memo)
+    }
+    updateSwap(dex.party!, id, { route })
   } catch (e) {
     updateSwap(dex.party!, id, { status: 'failed' })
     throw e

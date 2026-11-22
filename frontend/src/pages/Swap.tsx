@@ -266,7 +266,10 @@ export default function Swap() {
               <dl className="details">
                 <div>
                   <dt>Route</dt>
-                  <dd className="mono route">{routeOf(quote, market.token)}</dd>
+                  <dd className="mono route">
+                    {routeOf(quote, market.token)}
+                    {NETWORK.proxy && <span className="muted"> · sent through Orvane</span>}
+                  </dd>
                 </div>
                 <div>
                   <dt>Price impact</dt>
@@ -509,6 +512,7 @@ function History({ party, pendingOut }: { party: string; pendingOut: number }) {
                 </span>
                 <span className="muted small">
                   {r.status === 'filled' ? `quoted ${fmt(Number(r.quoted.amount), 6)}` : r.status === 'pending' ? 'not filled yet' : r.status === 'failed' ? 'not sent' : 'sending'}
+                  {r.route === 'orvane' && ' · via Orvane'}
                 </span>
                 <span className="cid mono">{dateTime(new Date(r.at))}</span>
               </motion.li>

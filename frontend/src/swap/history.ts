@@ -11,6 +11,8 @@ export interface SwapRecord {
   quoted: Amount
   received?: string
   status: 'sending' | 'filled' | 'pending' | 'failed'
+  /** sent through Orvane's proxy, or as a plain transfer */
+  route?: 'orvane' | 'direct'
 }
 
 const KEEP = 100

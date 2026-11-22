@@ -78,7 +78,7 @@ export default function PoolSwap() {
       })
       setTx({ phase: 'done', receipt })
       setRaw('')
-      activity.done(id, { detail: `+${fmt(+receipt.amountOut, 4)} ${toI!.label}. Only you and the operator can read the receipt.` })
+      activity.done(id, { detail: `+${fmt(+receipt.amountOut, 4)} ${toI!.label}.` })
       signalSettled(sellA ? 'CCx' : 'USDx')
     } catch (e) {
       const message = e instanceof Rejected ? `Handed back: ${e.message}. Your funds are unlocked.` : errorText(e)
@@ -143,7 +143,7 @@ export default function PoolSwap() {
         <Panel delay={0.15}>
           <Tilt className="swap-card">
             <header className="card-head">
-              <h2>Private swap</h2>
+              <h2>Swap</h2>
               <div className="slippage" role="radiogroup" aria-label="Slippage tolerance">
                 {SLIPPAGES.map((s) => (
                   <button key={s} role="radio" aria-checked={slippage === s} className={slippage === s ? 'on' : ''} onClick={() => setSlippage(s)}>
@@ -253,7 +253,7 @@ export default function PoolSwap() {
                               ? 'Sign in your wallet…'
                               : tx.phase === 'settling'
                                 ? 'Settling atomically…'
-                                : 'Swap privately · one signature'}
+                                : 'Swap · one signature'}
                 </span>
               </button>
             )}
@@ -285,7 +285,7 @@ export default function PoolSwap() {
           <Panel delay={0.3} className="receipts">
             <header className="card-head">
               <h3>Your trades</h3>
-              <span className="muted small">receipts only you and the operator can read</span>
+              <span className="muted small">your receipts</span>
             </header>
             {mine.swaps.length > 0 && (
               <ul className="receipt-list pending-list">

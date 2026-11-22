@@ -15,6 +15,7 @@ import { loop } from '@fivenorth/loop-sdk'
 import { JsonLedger } from '../../../shared/ledger.ts'
 import type { DisclosedContract } from '../../../shared/dex.ts'
 import type { Instrument } from '../../../shared/cantex.ts'
+import { factoryExerciseOf, proxiedDisclosed, wrapTransfer, ProxyUnavailable, type ProxyInfo } from '../../../shared/proxy.ts'
 import { GATEWAY_URL } from './gateway.ts'
 
 export type WalletKind = 'loop' | 'extension' | 'gateway'
@@ -40,6 +41,12 @@ export interface WalletSession {
    * registry instead.
    */
   transfer?: (recipient: string, amount: string, instrument: Instrument, memo: string) => Promise<void>
+  /**
+   * The same transfer, run through Orvane's proxy (see shared/proxy.ts), so
+   * Orvane's party confirms it. Throws before anything is signed if the wallet
+   * cannot prepare it.
+   */
+  transferVia?: (proxy: ProxyInfo, recipient: string, amount: string, instrument: Instrument, memo: string) => Promise<void>
   account?: () => Promise<LoopAccount>
   /** balances as the wallet itself reports them (Loop), per token: free and locked */
   balances?: () => Promise<Array<{ instrument: Instrument; free: string; locked: string }>>
@@ -127,7 +134,35 @@ interface LoopNative {
   getAccount(): Promise<{ has_preapproval?: boolean; utility_preapproval_admins?: string[]; usdc_bridge_access?: LoopAccount['usdcBridge'] }>
   getHolding(): Promise<Array<{ instrument_id: { admin: string; id: string }; total_unlocked_coin: string; total_locked_coin: string }>>
   transfer(recipient: string, amount: string, instrument: { instrument_admin: string; instrument_id: string }, options: { memo: string; executionMode: 'wait'; requestTimeout?: number; message?: string }): Promise<unknown>
+  // What `transfer` does in two steps: Loop's server prepares the transfer
+  // (registry context included), then the wallet signs and submits it.
+  getAuthToken(): string
+  connection: { prepareTransfer(authToken: string, params: LoopTransferRequest): Promise<LoopPrepared> }
+  submitAndWaitForTransaction(payload: LoopPrepared, options?: { requestTimeout?: number; message?: string }): Promise<unknown>
+  // prepares on Loop's side without signing, to see whether it would run
+  estimateGas(payload: LoopPrepared): Promise<{ can_execute: boolean }>
 }
+
+interface LoopTransferRequest {
+  recipient: string
+  amount: string
+  instrument: { instrument_admin: string; instrument_id: string }
+  requested_at: string
+  execute_before: string
+  memo: string
+}
+
+interface LoopPrepared {
+  commands: unknown[]
+  disclosedContracts: DisclosedContract[]
+  packageIdSelectionPreference: string[]
+  actAs: string[]
+  readAs: string[]
+  synchronizerId: string
+}
+
+// Same lifetimes as Loop's own transfer: requested now, valid for a day.
+const TRANSFER_TTL_MS = 24 * 60 * 60 * 1000
 
 let loopNetwork: string | undefined
 let loopNative: LoopNative | undefined
@@ -160,6 +195,33 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
       await native().transfer(recipient, amount, { instrument_admin: instrument.admin, instrument_id: instrument.id }, {
         memo,
         executionMode: 'wait',
+        requestTimeout: 180_000,
+        message: `Swap through Orvane: ${amount} ${instrument.id}`,
+      })
+    },
+    transferVia: async (proxy, recipient, amount, instrument, memo) => {
+      const loopProvider = native()
+      const now = Date.now()
+      let payload: LoopPrepared
+      try {
+        const prepared = await loopProvider.connection.prepareTransfer(loopProvider.getAuthToken(), {
+          recipient,
+          amount,
+          instrument: { instrument_admin: instrument.admin, instrument_id: instrument.id },
+          requested_at: new Date(now).toISOString(),
+          execute_before: new Date(now + TRANSFER_TTL_MS).toISOString(),
+          memo,
+        })
+        // only ever one plain V1 transfer goes into the proxy
+        const call = factoryExerciseOf(prepared.commands)
+        payload = { ...prepared, commands: [wrapTransfer(proxy, call)], disclosedContracts: proxiedDisclosed(proxy, prepared.disclosedContracts) }
+        // a dry run on Loop's side, nothing signed: fails if Loop's node cannot run the proxy
+        const dry = await loopProvider.estimateGas(payload)
+        if (!dry.can_execute) throw new Error('Loop cannot run this transaction')
+      } catch (e) {
+        throw new ProxyUnavailable(e instanceof Error ? e.message : String(e))
+      }
+      await loopProvider.submitAndWaitForTransaction(payload, {
         requestTimeout: 180_000,
         message: `Swap through Orvane: ${amount} ${instrument.id}`,
       })

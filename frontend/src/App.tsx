@@ -12,7 +12,6 @@ import { errorText } from './ui/errors.ts'
 import Landing from './pages/Landing.tsx'
 import Liquidity from './pages/Liquidity.tsx'
 import Portfolio from './pages/Portfolio.tsx'
-import Privacy from './pages/Privacy.tsx'
 import PoolSwap from './pages/PoolSwap.tsx'
 import Swap from './pages/Swap.tsx'
 import { NETWORK } from './ledger/network.ts'
@@ -25,7 +24,6 @@ const ALL_TABS = [
   { key: 'swap', label: 'Swap', scene: 'trade' },
   { key: 'liquidity', label: 'Liquidity', scene: 'liquidity' },
   { key: 'portfolio', label: 'Portfolio', scene: 'holdings' },
-  { key: 'privacy', label: 'Privacy', scene: 'lens' },
 ] as const
 // Liquidity is the Orvane pool, kept for later; it only shows where the pool runs (LocalNet).
 const TABS = ALL_TABS.filter((t) => t.key !== 'liquidity' || NETWORK.pool)
@@ -154,7 +152,6 @@ function Shell() {
                   {tab === 'swap' && (NETWORK.cantex ? <Swap /> : <PoolSwap />)}
                   {tab === 'liquidity' && NETWORK.pool && <Liquidity />}
                   {tab === 'portfolio' && <Portfolio />}
-                  {tab === 'privacy' && <Privacy />}
                 </>
               )}
             </motion.div>

@@ -5,13 +5,24 @@ so you can judge it for yourself.
 
 ## Swaps through Cantex (TestNet, MainNet)
 
-**What Orvane is.** A web app that runs in your browser. It has no server, no account and no
-contracts on the swap path, and it never holds keys or funds. It reads market data from Cantex's
+**What Orvane is.** A web app that runs in your browser. It has no server and no account on the
+swap path, its only contract there is the proxy below (Splice's code, not Orvane's), and it never
+holds keys or funds. It reads market data from Cantex's
 public API and your own contracts through your wallet.
 
 **What a swap is.** One token-standard transfer from your wallet to Cantex's swap party
 (`cantex-swap::…`), with the token you want back as the memo. Your wallet shows it and you sign it.
 Cantex fills it from its pools and sends the output back to your wallet.
+
+**Orvane's proxy.** Where it is set up, the transfer runs inside one exercise on Splice's
+`WalletUserProxy` (package `splice-util-featured-app-proxies`, by Digital Asset), a contract Orvane
+signs. Its batch-transfer choice is controlled by you, checks that every transfer's sender is you,
+and runs the transfer factory call your wallet prepared, unchanged; Orvane cannot add to it or
+redirect it. `shared/proxy.ts` only wraps a single V1 `TransferFactory_Transfer`. No featured app
+right is passed, so no activity markers are created. In exchange, Orvane's node confirms the
+transaction and sees it: your party, the token, the amount and Cantex's party. If your wallet cannot
+run the proxy (the package is not loaded on its node), the app sends the plain transfer instead,
+before anything is signed.
 
 **What you trust Cantex for.** To fill the swap at its pool price and send the output back. Cantex
 fills at the price in effect when your transfer arrives; its quote is not binding and Connect has
@@ -34,11 +45,12 @@ asked Cantex for one.
 TestNet namespace, read from its pool proofs and marked as inferred in `shared/networks.ts` until
 Cantex confirms it. A wrong id would make the transfer fail (no such party), not send funds elsewhere.
 
-**Who sees what.** Orvane: nothing. Cantex: your transfer (party, token, amount) and the swap it
+**Who sees what.** Orvane: nothing for plain transfers; the swap itself when it runs through the
+proxy. Cantex: your transfer (party, token, amount) and the swap it
 fills. The token's registry: transfers of its own token, as with any Canton token. Everyone else:
 pool reserves, prices and aggregate volumes only. Your swap history is kept in your browser.
 
-**Supply chain.** The wallet SDKs (Digital Asset's dApp SDK, Five North's Loop SDK) are pinned and
+**Supply chain.** The proxy package in `daml/dars/` is Splice's release DAR, unmodified. The wallet SDKs (Digital Asset's dApp SDK, Five North's Loop SDK) are pinned and
 `npm audit` is clean; a vulnerable transitive `uuid` is overridden to a fixed version.
 
 ## The Orvane pool (LocalNet, kept for later)

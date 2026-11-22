@@ -31,6 +31,12 @@ export interface NetworkInfo {
   gateway: boolean
   /** Orvane's own pool, kept for later */
   pool: boolean
+  /**
+   * Orvane's transfer proxy (shared/proxy.ts), published by
+   * scripts/proxy-setup.ts. Set once Orvane's party runs on a validator of
+   * this network; without it swaps are plain transfers.
+   */
+  proxy?: string
   cc: Instrument
 }
 
