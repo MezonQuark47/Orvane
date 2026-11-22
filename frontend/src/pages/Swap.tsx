@@ -13,8 +13,9 @@ import { checkQuote, deviationBps, minimumOut } from '../../../shared/quote.ts'
 import { useDex } from '../ledger/dex.tsx'
 import { NETWORK } from '../ledger/network.ts'
 import type { LoopAccount } from '../ledger/wallet.ts'
+import type { FeeStatus } from '../ledger/fees.ts'
 import { useMarket } from '../swap/market.tsx'
-import { SwapBlocked, executeSwap, type Stage } from '../swap/execute.ts'
+import { SwapBlocked, executeSwap, orvaneProxy, type Stage } from '../swap/execute.ts'
 import { loadSwaps, onSwapsChanged, type SwapRecord } from '../swap/history.ts'
 import { VaultStage } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
@@ -27,6 +28,7 @@ const SLIPPAGES = [50, 100, 300] // bps
 const AMOUNT = /^\d*\.?\d{0,10}$/
 const REQUOTE_MS = 5_000
 const STALE_MS = 15_000
+const FEE_CHECK_MS = 8_000
 
 type Phase = { phase: 'idle' } | { phase: 'busy'; stage: Stage } | { phase: 'done'; received: Dec; quoted: Dec; pending: boolean } | { phase: 'error'; message: string }
 
@@ -56,6 +58,7 @@ export default function Swap() {
   const [now, setNow] = useState(() => Date.now())
   const [tx, setTx] = useState<Phase>({ phase: 'idle' })
   const [account, setAccount] = useState<LoopAccount>()
+  const [fee, setFee] = useState<FeeStatus>()
 
   // default pair: Canton Coin into a dollar token, if there is one
   useEffect(() => {
@@ -121,6 +124,32 @@ export default function Swap() {
     }
   }, [wallet])
 
+  // Loop asks for a fee top-up in the middle of a transaction and drops the
+  // transaction, so ask Loop (nothing signed) whether its fee balance covers
+  // this swap, and keep asking so a top-up in Loop shows up here
+  const memo = quote?.memo
+  const sellAmount = amount > ZERO ? show(amount) : undefined
+  const swapParty = NETWORK.cantex?.swapParty
+  useEffect(() => {
+    setFee(undefined)
+    if (wallet.phase !== 'connected' || !wallet.session.fees || !sell || !memo || !sellAmount || !swapParty) return
+    const ask = wallet.session.fees
+    let alive = true
+    const read = async () => {
+      const proxy = wallet.session.transferVia ? await orvaneProxy() : undefined
+      const f = await ask(proxy, swapParty, sellAmount, sell, memo).catch(() => undefined)
+      if (alive) setFee(f)
+    }
+    read()
+    const id = setInterval(read, FEE_CHECK_MS)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+    // sell is re-derived each render; its identity is the instrument
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallet, sell?.admin, sell?.id, memo, sellAmount, swapParty])
+
   const pool = sell && buy ? market.poolFor(sell, buy) : undefined
   const check = useMemo(() => (quote && cc ? safeCheck(quote, quotePools ?? market.pools, cc) : undefined), [quote, quotePools, market.pools, cc])
   const age = quote ? now - quote.receivedAt : 0
@@ -137,7 +166,8 @@ export default function Swap() {
   const dollarPool = pool && cc && [pool.a, pool.b].some((s) => sameInstrument(s, cc)) && [pool.a.symbol, pool.b.symbol].some((x) => /usd/i.test(x))
   const poolPrice = pool && cc && dollarPool ? poolPriceInCc(pool, cc) : undefined
   const offMarket = poolPrice && reference ? deviationBps(poolPrice, reference.price) : 0
-  const disabled = !party || !quote || stale || busy || insufficient || belowMin || !check?.agrees || !canReceive || amount <= ZERO
+  const feeShort = !!fee?.topUp && !insufficient && !belowMin
+  const disabled = !party || !quote || stale || busy || insufficient || belowMin || !check?.agrees || !canReceive || feeShort || amount <= ZERO
 
   const submit = async () => {
     if (disabled || !quote || !api || !cc || !sell || !buy) return
@@ -323,6 +353,20 @@ export default function Swap() {
                 )}
               </div>
             )}
+            {party && feeShort && fee && wallet.phase === 'connected' && (
+              <div className="tx-warn">
+                Your {wallet.session.name} fee balance is too low for this swap{fee.amount ? ` (it needs about ${fee.amount} ${fee.asset ?? 'CC'})` : ''}. Top it up in{' '}
+                {wallet.session.name} first, then swap: topping up in the middle of a swap makes {wallet.session.name} drop the swap.
+                {wallet.session.walletUrl && (
+                  <div className="warn-actions">
+                    <a className="ghost small" href={wallet.session.walletUrl} target="_blank" rel="noreferrer">
+                      Open {wallet.session.name} ↗
+                    </a>
+                    <span className="muted small">checking every few seconds…</span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {!party ? (
               <ConnectFirst what="swap" />
@@ -341,6 +385,8 @@ export default function Swap() {
                         ? `Not enough ${sell?.symbol}`
                         : belowMin
                           ? 'Below the minimum'
+                          : feeShort
+                            ? 'Top up your fee balance'
                           : !quote
                             ? quoteError
                               ? 'No quote'

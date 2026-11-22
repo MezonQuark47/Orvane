@@ -17,6 +17,7 @@ import type { DisclosedContract } from '../../../shared/dex.ts'
 import type { Instrument } from '../../../shared/cantex.ts'
 import { factoryExerciseOf, proxiedDisclosed, wrapTransfer, ProxyUnavailable, type ProxyInfo } from '../../../shared/proxy.ts'
 import { GATEWAY_URL } from './gateway.ts'
+import { FeeShortfall, type FeeStatus } from './fees.ts'
 
 export type WalletKind = 'loop' | 'extension' | 'gateway'
 
@@ -47,6 +48,11 @@ export interface WalletSession {
    * cannot prepare it.
    */
   transferVia?: (proxy: ProxyInfo, recipient: string, amount: string, instrument: Instrument, memo: string) => Promise<void>
+  /**
+   * Whether the wallet's own fee balance covers this transfer (Loop), asked
+   * without signing anything. Pass the proxy when the swap would use it.
+   */
+  fees?: (proxy: ProxyInfo | undefined, recipient: string, amount: string, instrument: Instrument, memo: string) => Promise<FeeStatus>
   account?: () => Promise<LoopAccount>
   /** balances as the wallet itself reports them (Loop), per token: free and locked */
   balances?: () => Promise<Array<{ instrument: Instrument; free: string; locked: string }>>
@@ -139,9 +145,22 @@ interface LoopNative {
   getAuthToken(): string
   connection: { prepareTransfer(authToken: string, params: LoopTransferRequest): Promise<LoopPrepared> }
   submitAndWaitForTransaction(payload: LoopPrepared, options?: { requestTimeout?: number; message?: string }): Promise<unknown>
-  // prepares on Loop's side without signing, to see whether it would run
-  estimateGas(payload: LoopPrepared): Promise<{ can_execute: boolean }>
+  // prepares on Loop's side without signing: whether the transaction needs a
+  // fee from the user's Loop fee balance, and whether it can run as things are
+  estimateGas(payload: LoopPrepared): Promise<LoopDryRun>
 }
+
+interface LoopDryRun {
+  requires_gas: boolean
+  can_execute: boolean
+  estimated_gas_amount?: string
+  estimated_gas_asset?: string
+}
+
+// A fee is due and the balance does not cover it: Loop would stop to ask for
+// a top-up, which drops the transaction it was asked to sign.
+const needsTopUp = (d: LoopDryRun) => d.requires_gas && !d.can_execute
+const feeOf = (d: LoopDryRun): FeeStatus => ({ topUp: needsTopUp(d), amount: d.estimated_gas_amount, asset: d.estimated_gas_asset })
 
 interface LoopTransferRequest {
   recipient: string
@@ -188,6 +207,24 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
     if (!loopNative) throw new Error('Loop is not ready yet. Reconnect the wallet and try again.')
     return loopNative
   }
+  // Loop's server prepares the transfer, registry context included; nothing is signed yet
+  const prepare = (recipient: string, amount: string, instrument: Instrument, memo: string) => {
+    const now = Date.now()
+    return native().connection.prepareTransfer(native().getAuthToken(), {
+      recipient,
+      amount,
+      instrument: { instrument_admin: instrument.admin, instrument_id: instrument.id },
+      requested_at: new Date(now).toISOString(),
+      execute_before: new Date(now + TRANSFER_TTL_MS).toISOString(),
+      memo,
+    })
+  }
+  // only ever one plain V1 transfer goes into the proxy
+  const proxied = (proxy: ProxyInfo, prepared: LoopPrepared): LoopPrepared => ({
+    ...prepared,
+    commands: [wrapTransfer(proxy, factoryExerciseOf(prepared.commands))],
+    disclosedContracts: proxiedDisclosed(proxy, prepared.disclosedContracts),
+  })
   return {
     ...s,
     walletUrl: network === 'mainnet' ? 'https://wallet.looptech.io' : 'https://wallet.testnet.looptech.io',
@@ -200,31 +237,34 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
       })
     },
     transferVia: async (proxy, recipient, amount, instrument, memo) => {
-      const loopProvider = native()
-      const now = Date.now()
       let payload: LoopPrepared
+      let dry: LoopDryRun
       try {
-        const prepared = await loopProvider.connection.prepareTransfer(loopProvider.getAuthToken(), {
-          recipient,
-          amount,
-          instrument: { instrument_admin: instrument.admin, instrument_id: instrument.id },
-          requested_at: new Date(now).toISOString(),
-          execute_before: new Date(now + TRANSFER_TTL_MS).toISOString(),
-          memo,
-        })
-        // only ever one plain V1 transfer goes into the proxy
-        const call = factoryExerciseOf(prepared.commands)
-        payload = { ...prepared, commands: [wrapTransfer(proxy, call)], disclosedContracts: proxiedDisclosed(proxy, prepared.disclosedContracts) }
-        // a dry run on Loop's side, nothing signed: fails if Loop's node cannot run the proxy
-        const dry = await loopProvider.estimateGas(payload)
-        if (!dry.can_execute) throw new Error('Loop cannot run this transaction')
+        payload = proxied(proxy, await prepare(recipient, amount, instrument, memo))
+        dry = await native().estimateGas(payload)
       } catch (e) {
         throw new ProxyUnavailable(e instanceof Error ? e.message : String(e))
       }
-      await loopProvider.submitAndWaitForTransaction(payload, {
+      // the fee balance is short: same for the plain transfer, so no fallback
+      if (needsTopUp(dry)) throw new FeeShortfall(feeOf(dry))
+      if (!dry.can_execute) throw new ProxyUnavailable('Loop cannot run the proxied transfer')
+      await native().submitAndWaitForTransaction(payload, {
         requestTimeout: 180_000,
         message: `Swap through Orvane: ${amount} ${instrument.id}`,
       })
+    },
+    fees: async (proxy, recipient, amount, instrument, memo) => {
+      const prepared = await prepare(recipient, amount, instrument, memo)
+      if (proxy) {
+        try {
+          const dry = await native().estimateGas(proxied(proxy, prepared))
+          // judge the transaction that would actually be sent, unless the proxy cannot run at all
+          if (dry.can_execute || needsTopUp(dry)) return feeOf(dry)
+        } catch {
+          /* the proxy cannot run here; the plain transfer would be sent */
+        }
+      }
+      return feeOf(await native().estimateGas(prepared))
     },
     balances: async () => {
       const rows = await native().getHolding()

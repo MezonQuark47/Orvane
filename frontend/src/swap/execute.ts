@@ -19,6 +19,7 @@ import { dedupeDisclosed } from '../../../shared/registry.ts'
 import { loadProxy, ProxyUnavailable, type ProxyInfo } from '../../../shared/proxy.ts'
 import type { DexState, Mine } from '../ledger/dex.tsx'
 import { NETWORK } from '../ledger/network.ts'
+import { FeeShortfall, type FeeStatus } from '../ledger/fees.ts'
 import { recordSwap, updateSwap } from './history.ts'
 
 const TRANSFER_FACTORY_V2 = '#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferFactory'
@@ -38,7 +39,11 @@ export type Stage = 'checking' | 'signing' | 'settling'
 
 // the proxy settings for this network, fetched once
 let proxyInfo: Promise<ProxyInfo | undefined> | undefined
-const proxy = () => (proxyInfo ??= loadProxy(NETWORK.proxy).catch(() => undefined))
+export const orvaneProxy = () => (proxyInfo ??= loadProxy(NETWORK.proxy).catch(() => undefined))
+
+/** What to tell the user when the wallet's fee balance is short. */
+export const topUpMessage = (fee: FeeStatus, wallet: string) =>
+  `Your ${wallet} fee balance is too low for this swap${fee.amount ? ` (needs about ${fee.amount} ${fee.asset ?? 'CC'})` : ''}. Top it up in ${wallet} first; nothing was sent.`
 
 const freeOf = (m: Mine, i: Instrument) => m.holdings.filter((h) => !h.locked && sameInstrument(h.instrument, i)).reduce((s, h) => s + h.amount, ZERO)
 
@@ -70,19 +75,26 @@ export async function executeSwap(
   const guard = guardFreshQuote(seen, fresh, opts.slippageBps)
   if (!guard.ok) throw new SwapBlocked(guard.reason)
   if (dec(seen.sell.amount) > freeOf(dex.latest(), sell)) throw new SwapBlocked('Not enough balance for this swap.')
+  // Loop stops a transaction to ask for a fee top-up and drops it, so the fee
+  // balance is checked here, before the wallet is asked to sign
+  const via = session.transferVia ? await orvaneProxy() : undefined
+  if (session.fees) {
+    const fee = await session.fees(via, swapParty, seen.sell.amount, sell, fresh.memo).catch(() => undefined)
+    if (fee?.topUp) throw new SwapBlocked(topUpMessage(fee, session.name))
+  }
 
   // 2. send it
   const before = freeOf(dex.latest(), buy)
   const id = recordSwap(dex.party!, { sell: seen.sell, quoted: fresh.returned, at: Date.now() })
   opts.onStage('signing')
   try {
-    const via = session.transferVia ? await proxy() : undefined
     let route: 'orvane' | 'direct' = 'direct'
     if (via && session.transferVia) {
       try {
         await session.transferVia(via, swapParty, seen.sell.amount, sell, fresh.memo)
         route = 'orvane'
       } catch (e) {
+        if (e instanceof FeeShortfall) throw new SwapBlocked(topUpMessage(e.fee, session.name))
         // the user's node cannot run the proxy; nothing was signed, so send it plainly
         if (!(e instanceof ProxyUnavailable)) throw e
       }
