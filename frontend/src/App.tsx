@@ -196,15 +196,32 @@ function Shell() {
 function WalletButton() {
   const { wallet, disconnect } = useDex()
   const tip = useId()
+  // the full party id goes to the clipboard; the tip says so for a moment
+  const [copied, setCopied] = useState<'yes' | 'no'>()
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(undefined), 1600)
+    return () => clearTimeout(t)
+  }, [copied])
   if (wallet.phase === 'connected') {
+    const party = wallet.session.party
+    const copy = () =>
+      navigator.clipboard.writeText(party).then(
+        () => setCopied('yes'),
+        () => setCopied('no'),
+      )
     return (
       <div className="wallet">
-        <span className="has-tip">
-          <span className="wallet-party mono" tabIndex={0} aria-describedby={tip}>
-            <span className="wallet-dot" aria-hidden /> {shortParty(wallet.session.party)}
-          </span>
-          <span id={tip} role="tooltip" className="tip">
-            Signed in with {wallet.session.name}. Orvane never sees your keys.
+        <span className={`has-tip ${copied ? 'tip-on' : ''}`}>
+          <button className="wallet-party mono" onClick={copy} aria-describedby={tip} aria-label={`Copy your party id ${party}`}>
+            <span className="wallet-dot" aria-hidden /> {shortParty(party)}
+          </button>
+          <span id={tip} role="tooltip" className="tip" aria-live="polite">
+            {copied === 'yes'
+              ? 'Party id copied.'
+              : copied === 'no'
+                ? 'Could not copy; your browser blocked the clipboard.'
+                : `Signed in with ${wallet.session.name}. Click to copy your party id. Orvane never sees your keys.`}
           </span>
         </span>
         <button className="link small" onClick={() => disconnect()}>

@@ -56,6 +56,7 @@ export default function Swap() {
   const [raw, setRaw] = useState('')
   const [slippage, setSlippage] = useState(100)
   const [flips, setFlips] = useState(0)
+  const [showDetails, setShowDetails] = useState(false)
   const [quote, setQuote] = useState<Quote>()
   // the pools as they were when the quote came back, for Orvane's own check
   const [quotePools, setQuotePools] = useState<PoolState[]>()
@@ -207,6 +208,19 @@ export default function Swap() {
   const dollarPool = pool && cc && [pool.a, pool.b].some((s) => sameInstrument(s, cc)) && [pool.a.symbol, pool.b.symbol].some((x) => /usd/i.test(x))
   const poolPrice = pool && cc && dollarPool ? poolPriceInCc(pool, cc) : undefined
   const offMarket = poolPrice && reference ? deviationBps(poolPrice, reference.price) : 0
+  // a dollar figure under each amount, only where we know one: a USD token
+  // counts as a dollar, and CC uses the market reference price
+  const usdOf = (t: Token | undefined, n: number): number | undefined =>
+    !t || !(n > 0) ? undefined : /usd/i.test(t.symbol) ? n : cc && sameInstrument(t, cc) && reference ? n * reference.price : undefined
+  const payNumber = toNumber(amount)
+  const getNumber = quote ? toNumber(dec(quote.returned.amount)) : 0
+  const payUsd = usdOf(sell, payNumber)
+  const getUsd = usdOf(buy, getNumber)
+  // the orbs weigh the swap: the left one (what you pay) shrinks and the right
+  // one (what you get) grows with its size, by dollar value or else by impact
+  const share = !(payNumber > 0) ? 0 : Math.min(1, payUsd !== undefined ? Math.sqrt(payUsd / 2_000) : impact / 300)
+  const orbWeights: [number, number] | undefined = share > 0 ? [1 - 0.08 * share, 1 + 0.08 * share] : undefined
+  const rate = quote && payNumber > 0 ? getNumber / payNumber : undefined
   const feeShort = !!fee?.topUp && !insufficient && !belowMin
   const disabled = !party || !quote || stale || busy || insufficient || belowMin || !check?.agrees || !canReceive || feeShort || tooThin || !impactOk || amount <= ZERO
   const walletName = wallet.phase === 'connected' ? wallet.session.name : 'your wallet'
@@ -263,7 +277,7 @@ export default function Swap() {
   return (
     <div className="page page-trade">
       <div className="narrative">
-        <VaultStage scene="trade" />
+        <VaultStage scene="trade" weights={orbWeights} />
         <motion.p className="eyebrow" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           Swap · {NETWORK.label} · {VENUE} liquidity
         </motion.p>
@@ -296,7 +310,7 @@ export default function Swap() {
               </div>
             </header>
 
-            <div className="leg">
+            <div className="leg leg-in">
               <div className="leg-top">
                 <span>You pay</span>
                 {party && sell && (
@@ -327,6 +341,7 @@ export default function Swap() {
                   onChange={(t) => (buy && sameInstrument(t, buy) ? (setBuyId(sellId), setSellId(t)) : setSellId(t))}
                 />
               </div>
+              <div className="leg-foot mono">{payUsd !== undefined ? `≈ $${fmt(payUsd, 2)}` : ' '}</div>
             </div>
             <div className="flip-wrap">
               <motion.button
@@ -364,10 +379,34 @@ export default function Swap() {
                   onChange={(t) => (sell && sameInstrument(t, sell) ? (setSellId(buyId), setBuyId(t)) : setBuyId(t))}
                 />
               </div>
+              <div className="leg-foot mono">
+                {quote && buy ? <>at least {fmt(toNumber(minOut), 6)}{getUsd !== undefined ? ` · ≈ $${fmt(getUsd, 2)}` : ''}</> : ' '}
+              </div>
             </div>
 
             {quoteError && <p className="tx-error">{quoteError}</p>}
             {quote && sell && buy && (
+              <div className="terms">
+                <p className="mono">
+                  {rate !== undefined && (
+                    <span>
+                      1 {sell.symbol} = {fmt(rate, rate < 0.01 ? 8 : 5)} {buy.symbol}
+                    </span>
+                  )}
+                  <span className={check && check.priceImpactBps > 300 ? 'warn' : check && check.priceImpactBps > 100 ? 'soft-warn' : ''}>
+                    impact {check ? fmt(check.priceImpactBps / 100, 2) : '—'}%
+                  </span>
+                  <span>
+                    fees {fmt(toNumber(dec(quote.feePercentage)) * 100, 2)}% + {Number(quote.networkFee.amount)} {market.token(quote.networkFee)?.symbol ?? 'CC'}
+                  </span>
+                  {check && <span className={check.agrees ? 'ok' : 'warn'}>{check.agrees ? '✓ matches the pools' : `off by ${fmt(check.diffBps / 100, 2)}%`}</span>}
+                </p>
+                <button className="link" aria-expanded={showDetails} onClick={() => setShowDetails((v) => !v)}>
+                  {showDetails ? 'Less' : 'Details'}
+                </button>
+              </div>
+            )}
+            {quote && sell && buy && showDetails && (
               <dl className="details">
                 <div>
                   <dt>Route</dt>

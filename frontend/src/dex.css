@@ -446,3 +446,13 @@
   border-color: rgba(227, 178, 60, 0.45);
   text-decoration: none;
 }
+
+/* the party chip copies the full party id */
+button.wallet-party {
+  cursor: copy;
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+button.wallet-party:hover {
+  border-color: rgba(207, 169, 96, 0.45);
+  background: rgba(207, 169, 96, 0.06);
+}
