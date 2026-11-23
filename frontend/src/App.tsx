@@ -1,7 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog'
-import * as Tooltip from '@radix-ui/react-tooltip'
 import { LayoutGroup, motion } from 'motion/react'
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useId, useMemo, useState } from 'react'
 import { toNumber } from '../../shared/decimal.ts'
 import { DexProvider, useDex } from './ledger/dex.tsx'
 import { GATEWAY_URL } from './ledger/gateway.ts'
@@ -10,15 +9,21 @@ import { ActivityDock, ActivityProvider, Toasts } from './ui/activity.tsx'
 import { PageSkeleton, shortParty } from './ui/bits.tsx'
 import { errorText } from './ui/errors.ts'
 import Landing from './pages/Landing.tsx'
-import Liquidity from './pages/Liquidity.tsx'
 import Portfolio from './pages/Portfolio.tsx'
-import PoolSwap from './pages/PoolSwap.tsx'
 import Swap from './pages/Swap.tsx'
 import { NETWORK } from './ledger/network.ts'
 import { MarketProvider, useMarket } from './swap/market.tsx'
 
 const Vault = lazy(() => import('./three/Vault.tsx'))
 import type { VaultScene } from './three/Vault.tsx'
+// the Orvane pool's pages run on LocalNet only; other networks never load them
+const Liquidity = lazy(() => import('./pages/Liquidity.tsx'))
+const PoolSwap = lazy(() => import('./pages/PoolSwap.tsx'))
+
+// Phones get a still picture of the vault instead of the live 3D scene, so
+// they never download three.js or spend battery on it.
+const STILL = window.matchMedia('(max-width: 640px), (pointer: coarse) and (max-height: 500px)').matches
+if (STILL) document.documentElement.classList.add('still-vault')
 
 const ALL_TABS = [
   { key: 'swap', label: 'Swap', scene: 'trade' },
@@ -35,9 +40,7 @@ export default function App() {
     <DexProvider>
       <MarketProvider>
       <ActivityProvider>
-        <Tooltip.Provider delayDuration={200}>
-          <Shell />
-        </Tooltip.Provider>
+        <Shell />
       </ActivityProvider>
       </MarketProvider>
     </DexProvider>
@@ -90,9 +93,13 @@ function Shell() {
 
   return (
     <>
-      <Suspense fallback={null}>
-        <Vault weightA={weights.a} weightB={weights.b} pulse={pulse ? { id: pulse, from: 'CCx' } : null} scene={scene} />
-      </Suspense>
+      {STILL ? (
+        <div className="still-backdrop" aria-hidden />
+      ) : (
+        <Suspense fallback={null}>
+          <Vault weightA={weights.a} weightB={weights.b} pulse={pulse ? { id: pulse, from: 'CCx' } : null} scene={scene} />
+        </Suspense>
+      )}
       <div className="vignette" aria-hidden />
 
       <div className="app">
@@ -149,8 +156,19 @@ function Shell() {
               {tab !== 'home' && status === 'connecting' && <PageSkeleton />}
               {status === 'ready' && (
                 <>
-                  {tab === 'swap' && (NETWORK.cantex ? <Swap /> : <PoolSwap />)}
-                  {tab === 'liquidity' && NETWORK.pool && <Liquidity />}
+                  {tab === 'swap' &&
+                    (NETWORK.cantex ? (
+                      <Swap />
+                    ) : (
+                      <Suspense fallback={<PageSkeleton />}>
+                        <PoolSwap />
+                      </Suspense>
+                    ))}
+                  {tab === 'liquidity' && NETWORK.pool && (
+                    <Suspense fallback={<PageSkeleton />}>
+                      <Liquidity />
+                    </Suspense>
+                  )}
                   {tab === 'portfolio' && <Portfolio />}
                 </>
               )}
@@ -159,7 +177,8 @@ function Shell() {
         )}
 
         <footer className="foot">
-          <span>Daml · Canton Network · token standard V2</span>
+          {/* swaps through Loop are token standard V1 transfers; the Orvane pool (LocalNet) runs on V2 */}
+          <span>Daml · Canton Network · token standard {NETWORK.pool ? 'V2' : 'V1'}</span>
           <span className="sep" />
           <span>{status === 'ready' && market.status !== 'offline' ? `${NETWORK.label}${NETWORK.cantex ? ' · Cantex liquidity' : ''}` : status === 'connecting' ? 'Connecting…' : 'Offline'}</span>
           <span className={`live ${status}`} aria-hidden />
@@ -176,22 +195,18 @@ function Shell() {
 
 function WalletButton() {
   const { wallet, disconnect } = useDex()
+  const tip = useId()
   if (wallet.phase === 'connected') {
     return (
       <div className="wallet">
-        <Tooltip.Root>
-          <Tooltip.Trigger asChild>
-            <span className="wallet-party mono">
-              <span className="wallet-dot" aria-hidden /> {shortParty(wallet.session.party)}
-            </span>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content className="tip" sideOffset={8}>
-              Signed in with {wallet.session.name}. Orvane never sees your keys.
-              <Tooltip.Arrow className="tip-arrow" />
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
+        <span className="has-tip">
+          <span className="wallet-party mono" tabIndex={0} aria-describedby={tip}>
+            <span className="wallet-dot" aria-hidden /> {shortParty(wallet.session.party)}
+          </span>
+          <span id={tip} role="tooltip" className="tip">
+            Signed in with {wallet.session.name}. Orvane never sees your keys.
+          </span>
+        </span>
         <button className="link small" onClick={() => disconnect()}>
           Disconnect
         </button>

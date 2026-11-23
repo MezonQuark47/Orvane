@@ -241,34 +241,125 @@
 
 /* ---------------------------------------------------------------- swap */
 
-.token-select {
-  position: relative;
-  cursor: pointer;
-}
-.token-select select {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  padding-right: 16px;
-  cursor: pointer;
-}
-.token-select select option {
-  background: var(--panel-solid);
+.token-trigger {
   color: var(--text);
+  transition: border-color var(--dur-fast), background var(--dur-fast);
 }
-.token-select::after {
-  content: '';
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  transform: translateY(-70%) rotate(45deg);
-  pointer-events: none;
+.token-trigger:hover {
+  border-color: rgba(207, 169, 96, 0.45);
+  background: rgba(207, 169, 96, 0.06);
+}
+.token-trigger > svg {
+  color: var(--muted);
+  margin-left: -2px;
+}
+
+/* the token picker: a dialog on wide screens, a sheet from the bottom on phones */
+.dialog.picker {
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 64px));
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+.dialog.picker h2 {
+  margin: 0;
+}
+.dialog.picker p {
+  margin: -8px 0 0;
+}
+.picker-search {
+  width: 100%;
+  padding: 13px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--line-2);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  transition: border-color var(--dur-fast);
+}
+.picker-search:focus {
+  border-color: rgba(207, 169, 96, 0.55);
+}
+.picker-search::placeholder {
+  color: var(--faint);
+}
+.picker-list {
+  min-height: 0;
+  margin: 0 -10px;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.picker-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 14px;
+  cursor: pointer;
+}
+.picker-row.active {
+  background: rgba(207, 169, 96, 0.08);
+}
+.picker-names,
+.picker-figures {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.picker-symbol {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+.picker-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--muted);
+}
+.picker-meta .mono {
+  color: var(--faint);
+}
+.picker-figures {
+  justify-items: end;
+  font-size: 12px;
+}
+.picker-tag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(207, 169, 96, 0.35);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brass);
+}
+.picker-empty {
+  margin: 6px 0;
+}
+@media (max-width: 560px) {
+  .dialog.picker {
+    top: auto;
+    bottom: 0;
+    width: 100vw;
+    max-height: 88vh;
+    padding: 22px 18px;
+    transform: translateX(-50%);
+    border-radius: var(--radius) var(--radius) 0 0;
+    animation: sheet-in var(--dur-base) var(--ease-out);
+  }
+}
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 24px);
+  }
 }
 .glyph-other {
   display: inline-grid;

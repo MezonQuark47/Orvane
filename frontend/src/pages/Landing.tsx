@@ -75,7 +75,7 @@ function Hero({ go }: { go: Go }) {
       <motion.div className="ln-hero-foot" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, ease, delay: 1.1 }}>
         <p className="ln-lede">
           {NETWORK.cantex
-            ? `Any token Cantex lists, straight from your wallet into Canton's deepest pools. Orvane prices every swap itself and re-checks it the moment before you sign. No account, no fee.${NETWORK.proxy ? '' : ' Nothing kept.'}`
+            ? `Any token Cantex lists, straight from your wallet into Canton's deepest pools. Orvane prices every swap itself and checks it again just before your wallet opens. No account, no fee.${NETWORK.proxy ? '' : ' Nothing kept.'}`
             : 'Swap Canton Coin in one atomic transaction. Provide liquidity without handing it to anyone: it stays in your account, and comes back on its own at the end of its term.'}
         </p>
         <div className="ln-ctas">
@@ -202,7 +202,7 @@ function SwapCard() {
     <div className="ln-card">
       <div className="ln-card-head">
         <span>Your receipt</span>
-        <Seal>only you + operator</Seal>
+        <Seal>settles at once</Seal>
       </div>
       <div className="ln-big">
         1 <small>{a}</small>
@@ -229,7 +229,7 @@ function LiquidityCard() {
     <div className="ln-card">
       <div className="ln-card-head">
         <span>Your position</span>
-        <Seal>only you + operator</Seal>
+        <Seal>earns fees</Seal>
       </div>
       <div className="ln-row">
         <span>held in</span>
@@ -296,6 +296,10 @@ function ChecksCard() {
         <span>within your limit</span>
       </div>
       <div className="ln-row">
+        <span>Price impact</span>
+        <span>your OK above 5%</span>
+      </div>
+      <div className="ln-row">
         <span>Pool price vs. market price</span>
         <span>flagged if far off</span>
       </div>
@@ -337,10 +341,10 @@ const SWAP_CHAPTERS: ChapterData[] = [
       <>
         A price you can trust,
         <br />
-        <em>the moment you sign.</em>
+        <em>checked before you sign.</em>
       </>
     ),
-    body: "Cantex fills a swap at the pool price when it arrives. So Orvane prices every swap itself from the pools, compares it with Cantex's quote, and quotes again right before you sign. If the price moved past your limit, nothing is sent.",
+    body: "Cantex fills a swap at the pool price when it arrives. So Orvane prices every swap itself from the pools, compares it with Cantex's quote, and quotes again just before your wallet opens. If the price moved past your limit, nothing is sent. Every transfer expires after 15 minutes, so it cannot be filled later at a price nobody checked.",
     Card: ChecksCard,
   },
 ]
@@ -357,10 +361,10 @@ const CHAPTERS: ChapterData[] = [
       <>
         One pool, every provider,
         <br />
-        <em>no audience.</em>
+        <em>one transaction.</em>
       </>
     ),
-    body: 'Sell an exact amount for at least the minimum you set, in one atomic transaction. Your trade settles against every provider at once through the operator, so they never learn who you are, and you never learn who they are.',
+    body: 'Sell an exact amount for at least the minimum you set, in one atomic transaction. Your trade settles against every provider at once through the operator.',
     Card: SwapCard,
   },
   {

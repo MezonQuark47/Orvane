@@ -255,11 +255,36 @@ button:disabled {
   color: var(--text);
   font-weight: 500;
 }
-.tip-arrow {
-  fill: var(--ink-2);
-}
 @keyframes tip-in {
   from { opacity: 0; transform: translateY(-4px); }
+}
+/* a plain tooltip under the element it describes, on hover or focus */
+.has-tip {
+  position: relative;
+  display: inline-flex;
+}
+.has-tip > .tip {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 60;
+  width: max-content;
+  max-width: 260px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity var(--dur-fast, 160ms) var(--ease),
+    transform var(--dur-fast, 160ms) var(--ease),
+    visibility var(--dur-fast, 160ms);
+  animation: none;
+}
+.has-tip:hover > .tip,
+.has-tip:focus-within > .tip {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
 }
 
 /* ---------- pages ---------- */
@@ -1006,6 +1031,10 @@ p.tx-ok.mono {
   }
 }
 @media (max-width: 560px) {
+  .topbar {
+    padding: 12px 0;
+    row-gap: 10px;
+  }
   .act-as {
     display: none;
   }
@@ -1143,6 +1172,94 @@ p.tx-ok.mono {
   .narrative {
     padding-top: 34vh;
   }
+}
+
+/* ---------- the swap page on narrower screens ----------
+   It keeps two columns down to small laptops. Below that the swap card comes
+   right after the headline, ahead of the market details, so it is on the
+   first screen; the vault gets a shorter strip above the headline. */
+@media (max-width: 1080px) and (min-width: 901px) {
+  .page.page-trade {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+  }
+  .page-trade .narrative {
+    padding-top: 6vh;
+  }
+}
+@media (max-width: 900px) {
+  .page.page-trade {
+    padding-top: 22vh;
+    row-gap: 22px;
+  }
+  .page-trade .narrative {
+    display: contents;
+  }
+  .page-trade .eyebrow {
+    order: 1;
+  }
+  .page-trade .display {
+    order: 2;
+  }
+  .page-trade .rail {
+    order: 3;
+    width: 100%;
+    max-width: 560px;
+  }
+  .page-trade .price-block {
+    order: 4;
+  }
+  .page-trade .whisper {
+    order: 5;
+  }
+  .page-trade .vault-stage {
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 28vh;
+  }
+}
+@media (max-width: 560px) {
+  .page-trade .display {
+    font-size: 36px;
+  }
+}
+
+/* ---------- phones: a still of the vault instead of the 3D scene ----------
+   The live scene's room in CSS (two pools of light and the floor grid), and
+   the vault itself as a picture in each stage. */
+.still-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 80% 45% at 24% 16%, rgba(207, 169, 96, 0.12), transparent 70%),
+    radial-gradient(ellipse 70% 40% at 80% 82%, rgba(99, 181, 158, 0.09), transparent 70%),
+    var(--ink-0);
+}
+.still-backdrop::after {
+  content: '';
+  position: absolute;
+  left: -60%;
+  right: -60%;
+  bottom: 0;
+  height: 55%;
+  background-image:
+    linear-gradient(rgba(207, 169, 96, 0.2) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(207, 169, 96, 0.2) 1px, transparent 1px);
+  background-size: 46px 46px;
+  transform: perspective(340px) rotateX(64deg);
+  transform-origin: 50% 100%;
+  -webkit-mask-image: linear-gradient(to top, #000, transparent 80%);
+  mask-image: linear-gradient(to top, #000, transparent 80%);
+}
+/* the picture fades out at its own edges, so it sits on any background */
+.still-vault .vault-stage {
+  background: url('/vault-still.webp') center / contain no-repeat;
+}
+/* on the landing the vault shows at the top and at the end, not in every chapter */
+.still-vault .ln-chapter .ln-stage-col {
+  display: none;
 }
 
 /* ---------- top bar follows the page ---------- */

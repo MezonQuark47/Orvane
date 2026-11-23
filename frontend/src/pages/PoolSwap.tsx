@@ -133,8 +133,7 @@ export default function PoolSwap() {
             </div>
           </dl>
           <p className="whisper">
-            <EyeIcon /> Your input settles against every provider at once, through the operator. Providers never learn who traded, and you never learn
-            who provided.
+            <EyeIcon /> Your input settles against every provider at once, through the operator, in one transaction.
           </p>
         </motion.div>
       </div>

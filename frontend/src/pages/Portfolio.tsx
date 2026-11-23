@@ -68,12 +68,12 @@ export default function Portfolio() {
           <VaultStage scene="holdings" />
           <p className="eyebrow">Portfolio</p>
           <h1 className="display">
-            <span className="line">Yours, and</span>
+            <span className="line">Everything you hold,</span>
             <span className="line accent">
-              <em>only yours.</em>
+              <em>in one place.</em>
             </span>
           </h1>
-          <p className="lede">Connect a wallet to see your holdings, positions and trades. They are read from your own node; Orvane never stores them.</p>
+          <p className="lede">Connect a wallet to see what it holds at live pool prices, with your pending swaps and incoming transfers.</p>
         </div>
         <div className="rail">
           <Panel delay={0.15}>
@@ -91,10 +91,10 @@ export default function Portfolio() {
         <p className="eyebrow">Portfolio · {shortParty(party)}</p>
         <h1 className="display">
           <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
-            Yours, and
+            Everything you hold,
           </motion.span>
           <motion.span className="line accent" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}>
-            <em>only yours.</em>
+            <em>in one place.</em>
           </motion.span>
         </h1>
         <div className="networth">
@@ -129,7 +129,7 @@ export default function Portfolio() {
           <Panel delay={0.25}>
             <header className="card-head">
               <h3>History</h3>
-              <span className="muted small">records only you and the operator hold</span>
+              <span className="muted small">your pool trades and positions</span>
             </header>
             <History />
           </Panel>

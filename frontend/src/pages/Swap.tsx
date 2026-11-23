@@ -17,10 +17,11 @@ import type { FeeStatus } from '../ledger/fees.ts'
 import { useMarket } from '../swap/market.tsx'
 import { SwapBlocked, WATCH_MS, executeSwap, impactText, orvaneProxy, settleOpenSwaps, type Stage, type SwapResult } from '../swap/execute.ts'
 import { loadSwaps, onSwapsChanged, type SwapRecord } from '../swap/history.ts'
+import { TokenPicker } from '../swap/picker.tsx'
 import { VaultStage } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
 import { useActivity } from '../ui/activity.tsx'
-import { ConnectFirst, EyeIcon, Panel, Rolling, Sparkline, Tilt, TokenIcon, fmt, fmtCompact } from '../ui/bits.tsx'
+import { ConnectFirst, EyeIcon, Panel, Rolling, Sparkline, Tilt, fmt, fmtCompact } from '../ui/bits.tsx'
 import { errorText } from '../ui/errors.ts'
 import { clockTime, dateTime } from '../ui/time.ts'
 
@@ -170,6 +171,16 @@ export default function Swap() {
   }, [wallet, sell?.admin, sell?.id, memo, sellAmount, swapParty])
 
   const pool = sell && buy ? market.poolFor(sell, buy) : undefined
+  // each token's deepest pool, for the token picker; Canton Coin is in every pool
+  const depthOf = useMemo(() => {
+    const deepest = new Map<string, number>()
+    for (const p of market.pools) {
+      for (const s of [p.a, p.b]) deepest.set(`${s.admin}|${s.id}`, Math.max(deepest.get(`${s.admin}|${s.id}`) ?? 0, Number(p.tvlCc)))
+    }
+    const all = market.pools.reduce((s, p) => s + Number(p.tvlCc), 0)
+    return (t: Token) => (cc && sameInstrument(t, cc) ? all : (deepest.get(`${t.admin}|${t.id}`) ?? 0))
+  }, [market.pools, cc])
+  const balanceOf = useMemo(() => (party ? (t: Token) => toNumber(free(t)) : undefined), [party, free])
   const check = useMemo(() => (quote && cc ? safeCheck(quote, quotePools ?? market.pools, cc) : undefined), [quote, quotePools, market.pools, cc])
   const age = quote ? now - quote.receivedAt : 0
   const stale = !!quote && age > STALE_MS
@@ -266,7 +277,7 @@ export default function Swap() {
         {symbol && <PriceBlock symbol={symbol} poolPrice={poolPrice} reference={reference?.price} offMarket={offMarket} />}
         <p className="whisper">
           <EyeIcon /> Orvane holds nothing and charges nothing. Your wallet sends the swap straight to Cantex's pools; Orvane prices it itself first and
-          re-checks it right before you sign.
+          checks it again just before your wallet opens.
         </p>
       </div>
 
@@ -305,7 +316,15 @@ export default function Swap() {
                   }}
                   aria-label="Amount to pay"
                 />
-                <TokenSelect tokens={tokens} value={sell} other={buy} onChange={(t) => (buy && sameInstrument(t, buy) ? (setBuyId(sellId), setSellId(t)) : setSellId(t))} />
+                <TokenPicker
+                  side="pay"
+                  tokens={tokens}
+                  value={sell}
+                  other={buy}
+                  balance={balanceOf}
+                  depth={depthOf}
+                  onChange={(t) => (buy && sameInstrument(t, buy) ? (setBuyId(sellId), setSellId(t)) : setSellId(t))}
+                />
               </div>
             </div>
             <div className="flip-wrap">
@@ -334,7 +353,15 @@ export default function Swap() {
               </div>
               <div className="leg-main">
                 <Rolling value={quote ? toNumber(dec(quote.returned.amount)) : 0} digits={6} className="amount mono out" />
-                <TokenSelect tokens={tokens} value={buy} other={sell} onChange={(t) => (sell && sameInstrument(t, sell) ? (setSellId(buyId), setBuyId(t)) : setBuyId(t))} />
+                <TokenPicker
+                  side="receive"
+                  tokens={tokens}
+                  value={buy}
+                  other={sell}
+                  balance={balanceOf}
+                  depth={depthOf}
+                  onChange={(t) => (sell && sameInstrument(t, sell) ? (setSellId(buyId), setBuyId(t)) : setBuyId(t))}
+                />
               </div>
             </div>
 
@@ -547,29 +574,6 @@ function Freshness({ age }: { age: number }) {
       </svg>
       {age < 2_000 ? 'live' : `${Math.round(age / 1000)}s`}
     </span>
-  )
-}
-
-function TokenSelect({ tokens, value, other, onChange }: { tokens: Token[]; value?: Token; other?: Token; onChange: (t: Token) => void }) {
-  return (
-    <label className="token-chip token-select">
-      {value && <TokenIcon symbol={value.symbol} />}
-      <select
-        value={value ? `${value.admin}|${value.id}` : ''}
-        onChange={(e) => {
-          const t = tokens.find((x) => `${x.admin}|${x.id}` === e.target.value)
-          if (t) onChange(t)
-        }}
-        aria-label="Token"
-      >
-        {tokens.map((t) => (
-          <option key={`${t.admin}|${t.id}`} value={`${t.admin}|${t.id}`}>
-            {t.symbol}
-            {other && sameInstrument(t, other) ? ' (swap sides)' : ''}
-          </option>
-        ))}
-      </select>
-    </label>
   )
 }
 
