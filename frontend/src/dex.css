@@ -307,6 +307,20 @@
 .tx-warn.small {
   font-size: 12px;
 }
+.tx-warn .consent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text);
+  cursor: pointer;
+}
+.tx-warn .consent input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--amber);
+}
 
 .bridge-form {
   display: grid;

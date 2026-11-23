@@ -1,16 +1,10 @@
 // Your swaps, kept in this browser only (per network and wallet), the way a
 // wallet keeps its own list. Orvane has no server that sees them.
 
-import type { Amount } from '../../../shared/cantex.ts'
+import type { SettledSwap } from '../../../shared/settle.ts'
 import { NETWORK } from '../ledger/network.ts'
 
-export interface SwapRecord {
-  id: string
-  at: number
-  sell: Amount
-  quoted: Amount
-  received?: string
-  status: 'sending' | 'filled' | 'pending' | 'failed'
+export interface SwapRecord extends SettledSwap {
   /** sent through Orvane's proxy, or as a plain transfer */
   route?: 'orvane' | 'direct'
 }
@@ -47,6 +41,13 @@ export function updateSwap(party: string, id: string, patch: Partial<SwapRecord>
     party,
     loadSwaps(party).map((r) => (r.id === id ? { ...r, ...patch } : r)),
   )
+}
+
+/** Rewrites the whole list; saved, and heard by listeners, only if something changed. */
+export function reviseSwaps(party: string, revise: (records: SwapRecord[]) => SwapRecord[]) {
+  const before = loadSwaps(party)
+  const after = revise(before)
+  if (JSON.stringify(after) !== JSON.stringify(before)) save(party, after)
 }
 
 export function onSwapsChanged(listener: () => void) {

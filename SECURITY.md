@@ -27,13 +27,15 @@ before anything is signed.
 **What you trust Cantex for.** To fill the swap at its pool price and send the output back. Cantex
 fills at the price in effect when your transfer arrives; its quote is not binding and Connect has
 no minimum-output limit today. If Cantex cannot fill a swap, the transfer stays pending and your
-wallet can withdraw it.
+wallet can withdraw it. Orvane makes the transfer valid for 15 minutes, so Cantex cannot take it
+later at a price nobody checked, and a wallet window left open cannot sign it late.
 
 **What Orvane does about that.** Before asking for your signature it:
 
 - recomputes the expected output from the pools' public reserves and refuses the swap if Cantex's
   quote does not match them (checked across every quotable pair on TestNet and MainNet);
 - quotes again and refuses if the output fell below the limit you set;
+- asks you to accept a price impact above 5% and refuses one above 30%;
 - warns when the pool's price is far from Canton Coin's market price;
 - checks your balance, Cantex's minimum and whether your wallet can receive the output token.
 

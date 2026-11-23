@@ -9,20 +9,20 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ZERO, dec, show, toNumber, type Dec } from '../../../shared/decimal.ts'
 import { sameInstrument, type Instrument, type PoolState, type Quote, type Token } from '../../../shared/cantex.ts'
-import { checkQuote, deviationBps, minimumOut } from '../../../shared/quote.ts'
+import { CONFIRM_IMPACT_BPS, MAX_IMPACT_BPS, SWAP_TRANSFER_TTL_MS, checkQuote, deviationBps, minimumOut } from '../../../shared/quote.ts'
 import { useDex } from '../ledger/dex.tsx'
 import { NETWORK } from '../ledger/network.ts'
 import type { LoopAccount } from '../ledger/wallet.ts'
 import type { FeeStatus } from '../ledger/fees.ts'
 import { useMarket } from '../swap/market.tsx'
-import { SwapBlocked, executeSwap, orvaneProxy, type Stage } from '../swap/execute.ts'
+import { SwapBlocked, WATCH_MS, executeSwap, impactText, orvaneProxy, settleOpenSwaps, type Stage, type SwapResult } from '../swap/execute.ts'
 import { loadSwaps, onSwapsChanged, type SwapRecord } from '../swap/history.ts'
 import { VaultStage } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
 import { useActivity } from '../ui/activity.tsx'
 import { ConnectFirst, EyeIcon, Panel, Rolling, Sparkline, Tilt, TokenIcon, fmt, fmtCompact } from '../ui/bits.tsx'
 import { errorText } from '../ui/errors.ts'
-import { dateTime } from '../ui/time.ts'
+import { clockTime, dateTime } from '../ui/time.ts'
 
 const SLIPPAGES = [50, 100, 300] // bps
 const AMOUNT = /^\d*\.?\d{0,10}$/
@@ -30,7 +30,11 @@ const REQUOTE_MS = 5_000
 const STALE_MS = 15_000
 const FEE_CHECK_MS = 8_000
 
-type Phase = { phase: 'idle' } | { phase: 'busy'; stage: Stage } | { phase: 'done'; received: Dec; quoted: Dec; pending: boolean } | { phase: 'error'; message: string }
+type Phase =
+  | { phase: 'idle' }
+  | { phase: 'busy'; stage: Stage }
+  | { phase: 'done'; received: Dec; quoted: Dec; outcome: SwapResult['status']; until: number }
+  | { phase: 'error'; message: string }
 
 const parse = (s: string): Dec => {
   try {
@@ -44,7 +48,7 @@ export default function Swap() {
   const dex = useDex()
   const market = useMarket()
   const activity = useActivity()
-  const { party, free, mine, wallet } = dex
+  const { party, free, mine, wallet, loaded } = dex
   const { tokens, cc, api, policy, prices } = market
   const [sellId, setSellId] = useState<Instrument>()
   const [buyId, setBuyId] = useState<Instrument>()
@@ -59,15 +63,30 @@ export default function Swap() {
   const [tx, setTx] = useState<Phase>({ phase: 'idle' })
   const [account, setAccount] = useState<LoopAccount>()
   const [fee, setFee] = useState<FeeStatus>()
+  // the price impact the user accepted for this pair and amount
+  const [acceptedImpact, setAcceptedImpact] = useState<number>()
+  const swaps = useSwaps(party)
 
-  // default pair: Canton Coin into a dollar token, if there is one
+  // swaps left open settle from the balances as they come in
+  useEffect(() => {
+    if (party && loaded) settleOpenSwaps(party, mine)
+  }, [party, loaded, mine])
+
+  useEffect(() => setAcceptedImpact(undefined), [sellId, buyId, raw])
+
+  // default pair: Canton Coin into USDCx (Circle's USDC on Canton), else into
+  // the other side of Canton Coin's deepest pool
   useEffect(() => {
     if (!tokens.length || sellId) return
     const base = cc ?? tokens[0]
     const others = tokens.filter((t) => !sameInstrument(t, base))
+    const deepest = market.pools
+      .filter((p) => sameInstrument(p.a, base) || sameInstrument(p.b, base))
+      .sort((x, y) => Number(y.tvlCc) - Number(x.tvlCc))[0]
+    const across = deepest && (sameInstrument(deepest.a, base) ? deepest.b : deepest.a)
     setSellId(base)
-    setBuyId(others.find((t) => /usd/i.test(t.symbol)) ?? others[0])
-  }, [tokens, cc, sellId])
+    setBuyId(others.find((t) => t.symbol === 'USDCx') ?? others.find((t) => !!across && sameInstrument(t, across)) ?? others[0])
+  }, [tokens, cc, sellId, market.pools])
 
   const sell = sellId ? market.token(sellId) : undefined
   const buy = buyId ? market.token(buyId) : undefined
@@ -159,7 +178,17 @@ export default function Swap() {
   const insufficient = amount > balanceIn
   const ccMin = policy ? dec(policy.minConnectSwapCc) : ZERO
   const belowMin = !!sell && !!cc && sameInstrument(sell, cc) && amount > ZERO && amount < ccMin
-  const canReceive = !account || !buy || !cc ? true : sameInstrument(buy, cc) ? account.hasPreapproval : account.preapprovalAdmins.includes(buy.admin) || account.hasPreapproval
+  // Cantex needs a pre-approval for the token it sends back. A Canton Coin
+  // pre-approval covers Canton Coin only; other tokens need their own, from
+  // their issuer (Loop lists those by instrument admin).
+  const canReceive = !account || !buy || !cc ? true : sameInstrument(buy, cc) ? account.hasPreapproval : account.preapprovalAdmins.includes(buy.admin)
+  const impact = check?.priceImpactBps ?? 0
+  const tooThin = !!check && impact > MAX_IMPACT_BPS
+  const steep = !!check && impact > CONFIRM_IMPACT_BPS && !tooThin
+  // a tick holds while the impact stays within a point of what was accepted
+  const impactOk = !steep || (acceptedImpact !== undefined && impact <= acceptedImpact + 100)
+  // a swap the wallet never confirmed can still land; it is worth a look before swapping again
+  const unconfirmed = swaps.find((r) => r.status === 'unconfirmed' && Date.now() - r.at < WATCH_MS)
   const busy = tx.phase === 'busy'
   const reference = NETWORK.cantex ? prices[NETWORK.cantex.referenceMarket] : undefined
   // Canton Coin's price in a dollar pool, next to its market price
@@ -167,7 +196,8 @@ export default function Swap() {
   const poolPrice = pool && cc && dollarPool ? poolPriceInCc(pool, cc) : undefined
   const offMarket = poolPrice && reference ? deviationBps(poolPrice, reference.price) : 0
   const feeShort = !!fee?.topUp && !insufficient && !belowMin
-  const disabled = !party || !quote || stale || busy || insufficient || belowMin || !check?.agrees || !canReceive || feeShort || amount <= ZERO
+  const disabled = !party || !quote || stale || busy || insufficient || belowMin || !check?.agrees || !canReceive || feeShort || tooThin || !impactOk || amount <= ZERO
+  const walletName = wallet.phase === 'connected' ? wallet.session.name : 'your wallet'
 
   const submit = async () => {
     if (disabled || !quote || !api || !cc || !sell || !buy) return
@@ -178,18 +208,30 @@ export default function Swap() {
       const r = await executeSwap(dex, api, quote, {
         slippageBps: slippage,
         cc,
+        acceptedImpactBps: steep ? acceptedImpact : undefined,
         onStage: (stage) => {
           setTx({ phase: 'busy', stage })
-          activity.update(id, { detail: stage === 'signing' ? 'Sign in your wallet…' : stage === 'settling' ? 'Sent. Cantex is filling it from its pools…' : 'Checking the price…' })
+          activity.update(id, {
+            detail:
+              stage === 'signing'
+                ? 'Sign in your wallet…'
+                : stage === 'confirming'
+                  ? `${walletName} did not confirm it. Checking whether it was sent…`
+                  : stage === 'settling'
+                    ? 'Sent. Cantex is filling it from its pools…'
+                    : 'Checking the price…',
+          })
         },
       })
-      setTx({ phase: 'done', received: r.received, quoted: r.quoted, pending: r.status === 'pending' })
+      setTx({ phase: 'done', received: r.received, quoted: r.quoted, outcome: r.status, until: r.at + SWAP_TRANSFER_TTL_MS })
       if (r.status === 'filled') {
         activity.done(id, { detail: `+${fmt(toNumber(r.received), 6)} ${buy.symbol} in your wallet` })
         signalSettled(sell.symbol === 'CC' ? 'CCx' : 'USDx')
         setRaw('')
+      } else if (r.status === 'pending') {
+        activity.done(id, { detail: 'Sent, not filled yet; this page keeps watching. If Cantex cannot fill it, cancel the pending transfer in your wallet.' })
       } else {
-        activity.done(id, { detail: 'Sent, not filled yet. If Cantex cannot fill it, cancel the pending transfer in your wallet.' })
+        activity.done(id, { detail: `${walletName} did not confirm the swap and nothing has left your wallet so far. Check ${walletName} before you swap again.` })
       }
     } catch (e) {
       const message = e instanceof SwapBlocked ? e.message : errorText(e)
@@ -198,7 +240,12 @@ export default function Swap() {
     }
   }
 
-  const reached = tx.phase === 'busy' ? { checking: 0, signing: 1, settling: 2 }[tx.stage] : tx.phase === 'done' ? (tx.pending ? 2 : 4) : -1
+  const reached =
+    tx.phase === 'busy'
+      ? { checking: 0, signing: 1, confirming: 1, settling: 2 }[tx.stage]
+      : tx.phase === 'done'
+        ? { filled: 4, pending: 2, unconfirmed: 1 }[tx.outcome]
+        : -1
   const symbol = pool?.symbol
 
   return (
@@ -335,6 +382,27 @@ export default function Swap() {
               </p>
             )}
             {belowMin && <p className="tx-warn">Cantex fills swaps of at least {fmt(toNumber(ccMin), 0)} CC.</p>}
+            {tooThin && (
+              <p className="tx-warn">This swap would move the pool's price by {impactText(impact)}: the pool is too thin for this amount. Try a smaller amount.</p>
+            )}
+            {steep && (
+              <div className="tx-warn">
+                This swap moves the pool's price by {impactText(impact)}, so you get about that much less than at the pool's current price.
+                {party && (
+                  <label className="consent">
+                    <input type="checkbox" checked={impactOk} onChange={(e) => setAcceptedImpact(e.target.checked ? impact : undefined)} />
+                    Swap anyway at {impactText(impact)} price impact
+                  </label>
+                )}
+              </div>
+            )}
+            {party && unconfirmed && !busy && !(tx.phase === 'done' && tx.outcome === 'unconfirmed') && (
+              <p className="tx-warn">
+                Your swap of {fmt(Number(unconfirmed.sell.amount), 4)} {market.token(unconfirmed.sell)?.symbol ?? unconfirmed.sell.id} at {clockTime(unconfirmed.at)} is not
+                confirmed: {walletName} did not say whether it sent it. If you signed it, it can still go through until {clockTime(unconfirmed.at + SWAP_TRANSFER_TTL_MS)}.
+                Check {walletName} before you swap again.
+              </p>
+            )}
             {party && !canReceive && buy && (
               <div className="tx-warn">
                 Your wallet can't receive {buy.symbol} in one step yet. Cantex needs that to send the swap back to you.
@@ -378,7 +446,9 @@ export default function Swap() {
                       ? 'Checking the price…'
                       : tx.stage === 'signing'
                         ? 'Sign in your wallet…'
-                        : 'Filling…'
+                        : tx.stage === 'confirming'
+                          ? 'Checking your wallet…'
+                          : 'Filling…'
                     : amount <= ZERO
                       ? 'Enter an amount'
                       : insufficient
@@ -395,7 +465,11 @@ export default function Swap() {
                               ? 'Updating the price…'
                               : check && !check.agrees
                                 ? 'Quote does not match the pools'
-                                : `Swap ${sell?.symbol} for ${buy?.symbol}`}
+                                : tooThin
+                                  ? 'Price impact too high'
+                                  : !impactOk
+                                    ? 'Accept the price impact first'
+                                    : `Swap ${sell?.symbol} for ${buy?.symbol}`}
                 </span>
               </button>
             )}
@@ -414,19 +488,29 @@ export default function Swap() {
                     ))}
                   </ol>
                 )}
-                {tx.phase === 'done' && !tx.pending && buy && (
+                {tx.phase === 'done' && tx.outcome === 'filled' && buy && (
                   <p className="tx-ok mono">
                     +{fmt(toNumber(tx.received), 6)} {buy.symbol}
                     <span className="muted small"> · quoted {fmt(toNumber(tx.quoted), 6)}</span>
                   </p>
                 )}
-                {tx.phase === 'done' && tx.pending && <p className="tx-warn">Sent, but not filled yet. If Cantex can't fill it, cancel the pending transfer in your wallet; your funds come back.</p>}
+                {tx.phase === 'done' && tx.outcome === 'pending' && (
+                  <p className="tx-warn">
+                    Sent, not filled yet; this page keeps watching. If Cantex can't fill it, the transfer stays pending: cancel it in your wallet and your funds come back.
+                  </p>
+                )}
+                {tx.phase === 'done' && tx.outcome === 'unconfirmed' && (
+                  <p className="tx-warn">
+                    {walletName} did not say whether it sent the swap, and nothing has left your wallet so far. If you signed it, it can still go through until{' '}
+                    {clockTime(tx.until)}; this page keeps watching. Check {walletName} before you swap again.
+                  </p>
+                )}
               </motion.div>
             )}
           </Tilt>
         </Panel>
 
-        {party && <History party={party} pendingOut={mine.outgoing.filter((o) => o.receiver === NETWORK.cantex?.swapParty).length} />}
+        {party && <History rows={swaps} pendingOut={mine.outgoing.filter((o) => o.receiver === NETWORK.cantex?.swapParty).length} />}
       </div>
     </div>
   )
@@ -531,13 +615,39 @@ function PriceBlock({ symbol, poolPrice, reference, offMarket }: { symbol: strin
   )
 }
 
-function History({ party, pendingOut }: { party: string; pendingOut: number }) {
-  const market = useMarket()
-  const [rows, setRows] = useState<SwapRecord[]>(() => loadSwaps(party))
+// this wallet's swaps as this browser keeps them, kept current
+function useSwaps(party: string | undefined): SwapRecord[] {
+  const [rows, setRows] = useState<SwapRecord[]>(() => (party ? loadSwaps(party) : []))
   useEffect(() => {
+    if (!party) {
+      setRows([])
+      return
+    }
     setRows(loadSwaps(party))
     return onSwapsChanged(() => setRows(loadSwaps(party)))
   }, [party])
+  return rows
+}
+
+function statusText(r: SwapRecord) {
+  // past the window the page stops settling it from the balances
+  const watched = Date.now() - r.at < WATCH_MS
+  switch (r.status) {
+    case 'filled':
+      return `quoted ${fmt(Number(r.quoted.amount), 6)}`
+    case 'pending':
+      return watched ? 'sent, not filled yet' : 'no fill seen: check your wallet'
+    case 'unconfirmed':
+      return watched ? 'not confirmed by your wallet yet' : 'not confirmed: check your wallet'
+    case 'failed':
+      return 'not sent'
+    default:
+      return 'sending'
+  }
+}
+
+function History({ rows, pendingOut }: { rows: SwapRecord[]; pendingOut: number }) {
+  const market = useMarket()
   const sym = (i: Instrument) => market.token(i)?.symbol ?? i.id
   return (
     <Panel delay={0.3} className="receipts">
@@ -552,12 +662,12 @@ function History({ party, pendingOut }: { party: string; pendingOut: number }) {
         <ul className="receipt-list history">
           <AnimatePresence initial={false}>
             {rows.slice(0, 8).map((r) => (
-              <motion.li key={r.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={r.status === 'failed' ? 'warn' : undefined}>
+              <motion.li key={r.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={r.status === 'failed' || r.status === 'unconfirmed' ? 'warn' : undefined}>
                 <span className="mono">
                   {fmt(Number(r.sell.amount), 4)} {sym(r.sell)} → {r.received ? fmt(Number(r.received), 6) : '…'} {sym(r.quoted)}
                 </span>
                 <span className="muted small">
-                  {r.status === 'filled' ? `quoted ${fmt(Number(r.quoted.amount), 6)}` : r.status === 'pending' ? 'not filled yet' : r.status === 'failed' ? 'not sent' : 'sending'}
+                  {statusText(r)}
                   {r.route === 'orvane' && ' · via Orvane'}
                 </span>
                 <span className="cid mono">{dateTime(new Date(r.at))}</span>

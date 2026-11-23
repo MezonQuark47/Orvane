@@ -11,13 +11,15 @@
 //   Wallet Gateway   the reference CIP-0103 gateway (LocalNet, or an institution's own)
 
 import { DappClient, ExtensionAdapter, RemoteAdapter } from '@canton-network/dapp-sdk'
-import { loop } from '@fivenorth/loop-sdk'
+import { loop, PopupClosedError, RequestTimeoutError } from '@fivenorth/loop-sdk'
 import { JsonLedger } from '../../../shared/ledger.ts'
 import type { DisclosedContract } from '../../../shared/dex.ts'
 import type { Instrument } from '../../../shared/cantex.ts'
 import { factoryExerciseOf, proxiedDisclosed, wrapTransfer, ProxyUnavailable, type ProxyInfo } from '../../../shared/proxy.ts'
+import { SWAP_TRANSFER_TTL_MS } from '../../../shared/quote.ts'
 import { GATEWAY_URL } from './gateway.ts'
 import { FeeShortfall, type FeeStatus } from './fees.ts'
+import { OutcomeUnknown } from './outcome.ts'
 
 export type WalletKind = 'loop' | 'extension' | 'gateway'
 
@@ -139,12 +141,17 @@ export const connectExtension = () => connectWith('extension', 'Browser wallet',
 interface LoopNative {
   getAccount(): Promise<{ has_preapproval?: boolean; utility_preapproval_admins?: string[]; usdc_bridge_access?: LoopAccount['usdcBridge'] }>
   getHolding(): Promise<Array<{ instrument_id: { admin: string; id: string }; total_unlocked_coin: string; total_locked_coin: string }>>
-  transfer(recipient: string, amount: string, instrument: { instrument_admin: string; instrument_id: string }, options: { memo: string; executionMode: 'wait'; requestTimeout?: number; message?: string }): Promise<unknown>
+  transfer(
+    recipient: string,
+    amount: string,
+    instrument: { instrument_admin: string; instrument_id: string },
+    options: { memo: string; executionMode: 'wait'; requestedAt?: string; executeBefore?: string; requestTimeout?: number; message?: string },
+  ): Promise<LoopRun | undefined>
   // What `transfer` does in two steps: Loop's server prepares the transfer
   // (registry context included), then the wallet signs and submits it.
   getAuthToken(): string
   connection: { prepareTransfer(authToken: string, params: LoopTransferRequest): Promise<LoopPrepared> }
-  submitAndWaitForTransaction(payload: LoopPrepared, options?: { requestTimeout?: number; message?: string }): Promise<unknown>
+  submitAndWaitForTransaction(payload: LoopPrepared, options?: { requestTimeout?: number; message?: string }): Promise<LoopRun | undefined>
   // prepares on Loop's side without signing: whether the transaction needs a
   // fee from the user's Loop fee balance, and whether it can run as things are
   estimateGas(payload: LoopPrepared): Promise<LoopDryRun>
@@ -180,8 +187,27 @@ interface LoopPrepared {
   synchronizerId: string
 }
 
-// Same lifetimes as Loop's own transfer: requested now, valid for a day.
-const TRANSFER_TTL_MS = 24 * 60 * 60 * 1000
+// What Loop hands back once the ledger has answered (execution mode 'wait')
+interface LoopRun {
+  status?: 'succeeded' | 'failed' | 'unknown'
+  error?: { error_message?: string }
+}
+
+// Declining in Loop throws, and so does a transaction the ledger rejected:
+// nothing moved in either case. When Orvane stops waiting (a timeout) or the
+// Loop window closes, Loop's answer is still out. The window can stay open
+// and be signed after Orvane gave up, so the swap is not over.
+async function untilAnswered(run: () => Promise<LoopRun | undefined>): Promise<void> {
+  let r: LoopRun | undefined
+  try {
+    r = await run()
+  } catch (e) {
+    if (e instanceof RequestTimeoutError || e instanceof PopupClosedError) throw new OutcomeUnknown(e.message)
+    throw e
+  }
+  if (r?.status === 'failed') throw new Error(r.error?.error_message || 'The ledger rejected the transaction')
+  if (r?.status === 'unknown') throw new OutcomeUnknown('Loop could not tell whether the transaction went through')
+}
 
 let loopNetwork: string | undefined
 let loopNative: LoopNative | undefined
@@ -215,7 +241,7 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
       amount,
       instrument: { instrument_admin: instrument.admin, instrument_id: instrument.id },
       requested_at: new Date(now).toISOString(),
-      execute_before: new Date(now + TRANSFER_TTL_MS).toISOString(),
+      execute_before: new Date(now + SWAP_TRANSFER_TTL_MS).toISOString(),
       memo,
     })
   }
@@ -229,12 +255,17 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
     ...s,
     walletUrl: network === 'mainnet' ? 'https://wallet.looptech.io' : 'https://wallet.testnet.looptech.io',
     transfer: async (recipient, amount, instrument, memo) => {
-      await native().transfer(recipient, amount, { instrument_admin: instrument.admin, instrument_id: instrument.id }, {
-        memo,
-        executionMode: 'wait',
-        requestTimeout: 180_000,
-        message: `Swap through Orvane: ${amount} ${instrument.id}`,
-      })
+      const now = Date.now()
+      await untilAnswered(() =>
+        native().transfer(recipient, amount, { instrument_admin: instrument.admin, instrument_id: instrument.id }, {
+          memo,
+          executionMode: 'wait',
+          requestedAt: new Date(now).toISOString(),
+          executeBefore: new Date(now + SWAP_TRANSFER_TTL_MS).toISOString(),
+          requestTimeout: 180_000,
+          message: `Swap through Orvane: ${amount} ${instrument.id}`,
+        }),
+      )
     },
     transferVia: async (proxy, recipient, amount, instrument, memo) => {
       let payload: LoopPrepared
@@ -248,10 +279,12 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
       // the fee balance is short: same for the plain transfer, so no fallback
       if (needsTopUp(dry)) throw new FeeShortfall(feeOf(dry))
       if (!dry.can_execute) throw new ProxyUnavailable('Loop cannot run the proxied transfer')
-      await native().submitAndWaitForTransaction(payload, {
-        requestTimeout: 180_000,
-        message: `Swap through Orvane: ${amount} ${instrument.id}`,
-      })
+      await untilAnswered(() =>
+        native().submitAndWaitForTransaction(payload, {
+          requestTimeout: 180_000,
+          message: `Swap through Orvane: ${amount} ${instrument.id}`,
+        }),
+      )
     },
     fees: async (proxy, recipient, amount, instrument, memo) => {
       const prepared = await prepare(recipient, amount, instrument, memo)

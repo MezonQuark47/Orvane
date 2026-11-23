@@ -17,10 +17,10 @@ read [SECURITY.md](SECURITY.md).
 | | |
 |---|---|
 | **Own pricing check** | Every quote is recomputed from the pools' public reserves with Cantex's fee rules and compared with Cantex's own quote. Verified against every quotable pair on TestNet and MainNet (`scripts/smoke-cantex.ts`). |
-| **Price guard** | Cantex fills at the pool price when the transfer arrives and its quote is not binding. Orvane quotes again right before asking for a signature and sends nothing if the price moved past the user's limit. |
+| **Price guard** | Cantex fills at the pool price when the transfer arrives and its quote is not binding. Orvane quotes again right before asking for a signature and sends nothing if the price moved past the user's limit. The transfer is valid for 15 minutes, so it cannot be filled later at a price nobody checked. |
 | **Market sanity** | The pool's price is shown next to Canton Coin's market price; a pool far off the market is flagged before you trade into it. |
-| **Readiness checks** | Balance, Cantex's minimum size, and whether the wallet can receive the output token in one step (a transfer pre-approval), before the wallet is asked to sign. |
-| **Fill tracking** | Watches the user's own balance until the output lands; a swap Cantex has not filled shows up as pending, with what to do about it. |
+| **Readiness checks** | Balance, Cantex's minimum size, the price impact (above 5% the user accepts it, above 30% Orvane refuses the swap), and whether the wallet can receive the output token in one step (a transfer pre-approval for that token), before the wallet is asked to sign. |
+| **Fill tracking** | Watches the user's own balance until the output lands; a swap Cantex has not filled shows up as pending, with what to do about it, and settles in the history when the output arrives later. A swap the wallet never confirmed (it timed out) is not shown as failed: it is watched until its transfer would have expired. |
 | **Wallets** | Loop (TestNet, MainNet) swaps any listed token today. CIP-0103 browser wallets and the Wallet Gateway connect and show the portfolio; for swaps they need a registry endpoint per token (roadmap). Orvane never holds keys and reads only the user's own contracts, through their wallet. |
 | **Portfolio** | Every holding valued at live pool prices, pending and incoming transfers, and Loop's USDCx-to-Ethereum bridge. |
 | **Live market** | Prices and candles over Cantex's public websocket; quotes refresh every 5 seconds with a freshness indicator. |

@@ -105,6 +105,17 @@ export function guardFreshQuote(seen: Quote, fresh: Quote, slippageBps: number):
 
 export const minimumOut = (amount: Dec, slippageBps: number) => (amount * BigInt(10_000 - slippageBps)) / BPS
 
+// Price impact: above the first level the user has to accept it, above the
+// second Orvane does not send the swap (the pool is too thin for the size).
+export const CONFIRM_IMPACT_BPS = 500
+export const MAX_IMPACT_BPS = 3_000
+
+// How long a swap's transfer is valid. Cantex fills at the pool price of the
+// moment it takes the transfer, so a transfer left waiting must not be
+// fillable hours later at a price nobody checked. The ledger also refuses a
+// transfer signed after this, so a wallet window left open cannot send it late.
+export const SWAP_TRANSFER_TTL_MS = 15 * 60_000
+
 // How far the pool's own price sits from an outside reference price (for
 // example Canton Coin's market price), in basis points. A big gap means the
 // pool is mispriced and the trade is likely a bad one.
