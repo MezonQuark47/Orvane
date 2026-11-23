@@ -87,6 +87,19 @@ export interface HmacAuth {
   audience: string
 }
 
+// A real validator: an OAuth 2.0 client-credentials login at its identity
+// provider (Auth0, Keycloak, ...). The access token's subject is the ledger
+// user the client acts as; its audience is the one the participant checks.
+export interface OidcAuth {
+  tokenUrl: string
+  clientId: string
+  clientSecret: string
+  audience?: string
+  scope?: string
+}
+
+export type LedgerAuth = HmacAuth | OidcAuth
+
 const b64url = (bytes: Uint8Array | string) => {
   const raw = typeof bytes === 'string' ? new TextEncoder().encode(bytes) : bytes
   let s = ''
@@ -103,18 +116,42 @@ export async function hmacJwt(auth: HmacAuth, userId: string, ttlSeconds = 7 * 2
   return `${header}.${payload}.${b64url(sig)}`
 }
 
+// access tokens by client, reused until a minute before they expire
+const oidcTokens = new Map<string, { value: string; exp: number }>()
+
+export async function oidcToken(auth: OidcAuth): Promise<string> {
+  const key = [auth.tokenUrl, auth.clientId, auth.audience ?? '', auth.scope ?? ''].join('|')
+  const cached = oidcTokens.get(key)
+  if (cached && cached.exp > Date.now() + 60_000) return cached.value
+  const form = new URLSearchParams({ grant_type: 'client_credentials', client_id: auth.clientId, client_secret: auth.clientSecret })
+  if (auth.audience) form.set('audience', auth.audience)
+  if (auth.scope) form.set('scope', auth.scope)
+  const res = await fetch(auth.tokenUrl, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`login at ${auth.tokenUrl} failed: ${res.status} ${text.slice(0, 200)}`)
+  const r = JSON.parse(text) as { access_token?: string; expires_in?: number }
+  if (!r.access_token) throw new Error(`login at ${auth.tokenUrl} returned no access token`)
+  oidcTokens.set(key, { value: r.access_token, exp: Date.now() + (r.expires_in ?? 300) * 1000 })
+  return r.access_token
+}
+
+/** The Authorization header for `userId`. An OIDC token always acts as the client's own ledger user. */
+export async function bearer(auth: LedgerAuth, userId: string): Promise<string> {
+  return `Bearer ${'secret' in auth ? await hmacJwt(auth, userId, 3600) : await oidcToken(auth)}`
+}
+
 export type Transport = (path: string, body?: unknown) => Promise<unknown>
 
 export class JsonLedger {
   readonly baseUrl: string
   readonly userId: string
-  private readonly auth?: HmacAuth
+  private readonly auth?: LedgerAuth
   private token?: { value: string; exp: number }
   private readonly transport?: Transport
 
   // `transport` replaces HTTP, e.g. to read through a wallet's own ledger
   // connection (CIP-0103 `ledgerApi`) instead of talking to a participant.
-  constructor(baseUrl: string, userId = 'participant_admin', auth?: HmacAuth, transport?: Transport) {
+  constructor(baseUrl: string, userId = 'participant_admin', auth?: LedgerAuth, transport?: Transport) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
     this.userId = userId
     this.auth = auth
@@ -128,12 +165,16 @@ export class JsonLedger {
 
   private async headers(json: boolean): Promise<Record<string, string>> {
     const h: Record<string, string> = json ? { 'content-type': 'application/json' } : {}
-    if (this.auth) {
-      if (!this.token || this.token.exp < Date.now() + 60_000) {
-        this.token = { value: await hmacJwt(this.auth, this.userId, 3600), exp: Date.now() + 3600_000 }
-      }
-      h.authorization = `Bearer ${this.token.value}`
+    if (!this.auth) return h
+    if (!('secret' in this.auth)) {
+      // cached per client with the identity provider's own expiry
+      h.authorization = `Bearer ${await oidcToken(this.auth)}`
+      return h
     }
+    if (!this.token || this.token.exp < Date.now() + 60_000) {
+      this.token = { value: await hmacJwt(this.auth, this.userId, 3600), exp: Date.now() + 3600_000 }
+    }
+    h.authorization = `Bearer ${this.token.value}`
     return h
   }
 

@@ -1,0 +1,16 @@
+{
+  "network": "devnet",
+  "ledger": {
+    "url": "https://json-ledger-api.your-validator.example",
+    "adminUser": "the-ledger-user-your-client-logs-in-as",
+    "appUser": "the-ledger-user-your-client-logs-in-as",
+    "audience": "https://canton.network.global",
+    "oidc": { "tokenUrl": "https://your-identity-provider.example/oauth/token" }
+  },
+  "userParticipants": [],
+  "scan": "https://a-scan-your-machine-can-reach.example",
+  "operatorHint": "orvane-operator",
+  "testTokens": [],
+  "instruments": {},
+  "pools": []
+}

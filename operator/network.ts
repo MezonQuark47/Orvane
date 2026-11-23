@@ -2,13 +2,20 @@
 // the registries, and the one-time setup of parties, packages and pools.
 
 import { readFile } from 'node:fs/promises'
-import { JsonLedger, type HmacAuth } from '../shared/ledger.ts'
+import { JsonLedger, type LedgerAuth } from '../shared/ledger.ts'
 import { Registries, ScanRegistry, TestTokenRegistry, TEST_TOKEN } from '../shared/registry.ts'
 import { DEX, createPoolRules, sameInstrument, seconds, type DisclosedContract, type InstrumentId, type PoolRules, type PoolTerms } from '../shared/dex.ts'
 
 export interface NetworkConfig {
   network: string
-  ledger: { url: string; adminUser: string; appUser: string; audience: string }
+  ledger: {
+    url: string
+    adminUser: string
+    appUser: string
+    audience: string
+    /** a real validator's identity provider (OAuth 2.0 client credentials); LocalNet has none */
+    oidc?: { tokenUrl: string; scope?: string }
+  }
   userParticipants: string[]
   scan: string
   operatorHint: string
@@ -36,11 +43,22 @@ export async function loadConfig(network = process.env.ORVANE_NETWORK ?? 'localn
 }
 
 // LocalNet participants accept HS256 tokens signed with a well-known dev
-// secret. Real networks use an identity provider; that is wired in Phase 5.
-export const authFor = (cfg: NetworkConfig): HmacAuth => ({
-  secret: process.env.LEDGER_AUTH_SECRET ?? 'unsafe',
-  audience: cfg.ledger.audience,
-})
+// secret. Real validators log in through their identity provider; the
+// client's id and secret come from the environment, never from a file.
+export function authFor(cfg: NetworkConfig): LedgerAuth {
+  const oidc = cfg.ledger.oidc
+  if (oidc) {
+    const clientId = process.env.ORVANE_OIDC_CLIENT_ID
+    const clientSecret = process.env.ORVANE_OIDC_CLIENT_SECRET
+    if (!clientId || !clientSecret) throw new Error('set ORVANE_OIDC_CLIENT_ID and ORVANE_OIDC_CLIENT_SECRET to log in to the validator')
+    return { tokenUrl: oidc.tokenUrl, clientId, clientSecret, audience: cfg.ledger.audience, scope: oidc.scope }
+  }
+  // the well-known secret must never reach a real network
+  if (cfg.network !== 'localnet' && !process.env.LEDGER_AUTH_SECRET) {
+    throw new Error(`config/pairs.${cfg.network}.json has no ledger.oidc: only LocalNet takes the development login`)
+  }
+  return { secret: process.env.LEDGER_AUTH_SECRET ?? 'unsafe', audience: cfg.ledger.audience }
+}
 
 const DARS = [
   new URL('../daml/orvane/.daml/dist/orvane-0.1.0.dar', import.meta.url),

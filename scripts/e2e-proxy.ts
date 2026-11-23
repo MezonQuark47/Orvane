@@ -18,7 +18,7 @@
 //   node scripts/e2e-proxy.ts
 
 import { readFile } from 'node:fs/promises'
-import { JsonLedger, hmacJwt } from '../shared/ledger.ts'
+import { JsonLedger, bearer } from '../shared/ledger.ts'
 import { Scan, tapAmulet, holdingsOf, extraArgsFrom } from '../shared/amulet.ts'
 import { factoryExerciseOf, proxiedDisclosed, wrapTransfer, TRANSFER_FACTORY_V1, type ProxyInfo } from '../shared/proxy.ts'
 import { authFor, loadConfig } from '../operator/network.ts'
@@ -179,7 +179,7 @@ async function proxiedTransfer(label: string, receiver: string, amount: string) 
   // validated and confirmed the transaction and has it
   const res = await fetch(`${cfg.ledger.url}/v2/updates/update-by-id`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${await hmacJwt(auth, cfg.ledger.appUser)}`, 'content-type': 'application/json' },
+    headers: { authorization: await bearer(auth, cfg.ledger.appUser), 'content-type': 'application/json' },
     body: JSON.stringify({
       updateId: tx.updateId,
       updateFormat: { includeTransactions: { eventFormat: { filtersByParty: { [proxy.provider]: { cumulative: [] } }, verbose: true }, transactionShape: 'TRANSACTION_SHAPE_LEDGER_EFFECTS' } },

@@ -58,9 +58,11 @@ running the swap's transfer through Splice's own `WalletUserProxy` (package
 - no activity markers are created: under today's marker rules a non-wallet app may only mark its own
   traffic.
 
-`scripts/proxy-setup.ts` loads the package, makes Orvane's party a featured app (LocalNet only;
-on real networks that is an SV vote), creates the proxy and publishes it to
-`frontend/public/orvane-proxy.<network>.json`. `scripts/e2e-proxy.ts` checks it on LocalNet. On
+`scripts/proxy-setup.ts` loads the package, makes Orvane's party a featured app (on LocalNet and
+DevNet, where a party may feature itself; on TestNet and MainNet that is the Featured App
+application), creates the proxy and publishes it to `frontend/public/orvane-proxy.<network>.json`.
+It logs in to a real validator with OAuth 2.0 client credentials; [DEPLOY.md](DEPLOY.md) has the
+steps. `scripts/e2e-proxy.ts` checks it on LocalNet. On
 TestNet and MainNet the app sends plain transfers until Orvane's party runs on a validator there and
 the user's wallet has the proxy package loaded; if the wallet cannot run the proxy, the swap falls
 back to a plain transfer before anything is signed.
@@ -78,10 +80,12 @@ There is no Orvane server on the swap path: the app talks to Cantex's public API
 on TestNet you need a [Loop](https://docs.fivenorth.io/loop-sdk/overview/) TestNet wallet with some
 test Canton Coin, and receiving turned on (a transfer pre-approval) for the token you buy.
 
+Putting the site online (Vercel) and setting up Orvane's validator are in [DEPLOY.md](DEPLOY.md).
+
 ## Tests
 
 ```powershell
-node --test shared/quote.test.ts     # pricing check against captured Cantex quotes
+node --test shared/*.test.ts         # pricing check, proxy wrapper, swap settling, ledger login
 node scripts/smoke-cantex.ts         # every TestNet pair, live
 node scripts/smoke-cantex.ts mainnet # every MainNet pair, live
 node scripts/proxy-setup.ts; node scripts/e2e-proxy.ts   # Orvane's proxy on LocalNet

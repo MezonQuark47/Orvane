@@ -1,0 +1,82 @@
+# Deploying Orvane
+
+Two separate pieces: the website, which is all a swap needs, and Orvane's validator with its transfer
+proxy, which is what earns featured-app rewards.
+
+## 1. The website (Vercel)
+
+On TestNet and MainNet the app is a static site. It talks to Cantex's public API and to the user's
+wallet; there is no Orvane server. `vercel.json` holds the build and the security headers.
+
+1. In Vercel: **Add New → Project**, import the repository. Leave **Root Directory** at the repository
+   root; `vercel.json` sets the rest (install `npm ci --prefix frontend`, build
+   `npm --prefix frontend run build:mainnet`, output `frontend/dist`).
+2. **Settings → Build and Deployment → Node.js Version**: 22.x.
+3. Deploy. Every push to `main` deploys to production; other branches get their own preview address.
+4. Once the site has its own domain, set the environment variable `VITE_SITE_URL` to it (for example
+   `https://orvane.xyz`). Until then link previews use Vercel's production address.
+
+What the headers in `vercel.json` do:
+
+- `Content-Security-Policy`: scripts only from the site itself. Network connections only to the site,
+  Cantex (`api.cantex.io`, `api.testnet.cantex.io`) and Loop's connection service (`cantonloop.com`,
+  `testnet.cantonloop.com`). No other site may frame it. Inline styles are allowed because Loop's
+  sign-in window adds its own stylesheet. A new wallet or data source needs its address added here.
+- `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` and
+  `Permissions-Policy` (no camera, microphone, location, payment or USB access).
+- No `Cross-Origin-Opener-Policy`: Loop signs in through a popup and watches whether it is still open,
+  which that header would break.
+- Hashed files under `/assets/` are cached for a year.
+
+Moving to Cloudflare Pages later is the same build and output folder; the headers move into a
+`frontend/public/_headers` file in Cloudflare's format.
+
+## 2. Orvane's validator and proxy
+
+Swaps work without this; it is what makes Orvane's party a confirmer of every swap (see the README,
+"Orvane's proxy and featured-app rewards").
+
+1. **A validator** on the network (self-hosted or a node-as-a-service provider), with a ledger user that
+   logs in through OAuth 2.0 client credentials (Auth0, Keycloak, ...) and may allocate parties and
+   grant itself rights on them (participant admin). Ask the provider for these if they run the node.
+2. **The config.** Copy `config/pairs.example.json` to `config/pairs.<network>.json` (`devnet`,
+   `testnet` or `mainnet`) and fill it in:
+   - `ledger.url`: the validator's JSON Ledger API.
+   - `ledger.adminUser`, `ledger.appUser`: the ledger user the client logs in as, which is the subject
+     of its tokens (on Auth0, `<client id>@clients`).
+   - `ledger.audience`: the audience the participant checks (Splice's default is
+     `https://canton.network.global`).
+   - `ledger.oidc.tokenUrl`, plus `scope` if the identity provider needs one.
+   - `userParticipants`: other participants you run that host users; usually none.
+   - `scan`: DevNet only, a Scan your machine can reach, to feature the party. Scans accept known IP
+     addresses only, so run the script from the validator's network if yours is not allowed.
+3. **Run the setup** with the client's credentials in the environment, never in a file:
+
+   ```powershell
+   $env:ORVANE_NETWORK = 'devnet'
+   $env:ORVANE_OIDC_CLIENT_ID = '<client id>'
+   $env:ORVANE_OIDC_CLIENT_SECRET = '<client secret>'
+   node scripts/proxy-setup.ts
+   ```
+
+   It loads the proxy package (or says to ask the validator's operator, if the node does not take
+   uploads), allocates the `orvane-app` party, features it on DevNet, creates the proxy and writes
+   `frontend/public/orvane-proxy.<network>.json`. Running it again changes nothing.
+4. **Switch the app over**: set `proxy: '/orvane-proxy.<network>.json'` for that network in
+   `shared/networks.ts`, commit both files and push.
+5. **The users' side**: a Loop user's swap runs through the proxy only once Five North has loaded
+   `splice-util-featured-app-proxies` 1.2.5 on Loop's validators. Until then the app sends plain
+   transfers, before anything is signed.
+
+The `orvane-app::…` party is the one to name in the Featured App application and the Canton Coin
+lock. Create it once, on the validator you will keep.
+
+## 3. Before applying as a Featured App
+
+| Step | Who |
+|---|---|
+| A company: name, website and background for the application | you |
+| A validator, the `orvane-app` party and the proxy (section 2) | you and the validator provider |
+| The proxy package on Loop's validators | Five North |
+| A first small MainNet swap (at least 50 CC) through the site | you |
+| The site live on MainNet; the form asks how long it has been live | you |
