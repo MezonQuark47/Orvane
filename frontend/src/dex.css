@@ -106,8 +106,14 @@
   cursor: not-allowed;
 }
 .wallet-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 15px;
   color: var(--text);
+}
+.wallet-icon {
+  border-radius: 5px;
 }
 .wallet-note {
   color: var(--brass);

@@ -131,7 +131,45 @@ export async function extensionAvailable(): Promise<boolean> {
     return false
   }
 }
-export const connectExtension = () => connectWith('extension', 'Browser wallet', new DappClient(new ExtensionAdapter().provider(), { providerType: 'browser' }))
+
+/** A Canton wallet extension that announced itself in this browser. */
+export interface ExtensionWallet {
+  id: string
+  name: string
+  icon?: string
+  /** routing key for its messages; its id when it gives none */
+  target?: string
+}
+
+// Canton wallet extensions answer a request event with an announcement each
+// (the dApp SDK's own discovery events), so several installed wallets can be
+// told apart instead of whichever answers first.
+export async function extensionWallets(timeoutMs = 400): Promise<ExtensionWallet[]> {
+  const found = new Map<string, ExtensionWallet>()
+  const on = (e: Event) => {
+    const d = (e as CustomEvent<Partial<ExtensionWallet>>).detail
+    if (d?.id && d.name && !found.has(d.id)) found.set(d.id, { id: d.id, name: d.name, icon: d.icon, target: d.target })
+  }
+  window.addEventListener('canton:announceProvider', on)
+  try {
+    window.dispatchEvent(new CustomEvent('canton:requestProvider', { detail: {} }))
+    await new Promise((r) => setTimeout(r, timeoutMs))
+  } finally {
+    window.removeEventListener('canton:announceProvider', on)
+  }
+  return [...found.values()]
+}
+
+/** Connects to one announced extension, or, without one, to whichever extension answers. */
+export const connectExtension = (wallet?: ExtensionWallet) =>
+  connectWith(
+    'extension',
+    wallet?.name ?? 'Browser wallet',
+    new DappClient(
+      new ExtensionAdapter(wallet ? { providerId: `browser:ext:${wallet.id}`, name: wallet.name, icon: wallet.icon, target: wallet.target ?? wallet.id } : undefined).provider(),
+      { providerType: 'browser' },
+    ),
+  )
 
 // ---------- Loop ----------
 

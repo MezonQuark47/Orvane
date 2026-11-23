@@ -4,7 +4,7 @@ import { Suspense, lazy, useEffect, useId, useMemo, useState } from 'react'
 import { toNumber } from '../../shared/decimal.ts'
 import { DexProvider, useDex } from './ledger/dex.tsx'
 import { GATEWAY_URL } from './ledger/gateway.ts'
-import type { WalletKind } from './ledger/wallet.ts'
+import type { ExtensionWallet, WalletKind } from './ledger/wallet.ts'
 import { ActivityDock, ActivityProvider, Toasts } from './ui/activity.tsx'
 import { PageSkeleton, shortParty } from './ui/bits.tsx'
 import { errorText } from './ui/errors.ts'
@@ -239,30 +239,47 @@ function ConnectDialog() {
     if (wallet.phase === 'connected') setOpen(false)
   }, [wallet.phase])
 
-  // a CIP-0103 browser-extension wallet, if one is installed
-  const [extension, setExtension] = useState(false)
+  // CIP-0103 browser-extension wallets: each one that announces itself, or,
+  // when none does, whichever extension answers
+  const [extensions, setExtensions] = useState<ExtensionWallet[]>([])
+  const [anyExtension, setAnyExtension] = useState(false)
   useEffect(() => {
     if (!open) return
-    import('./ledger/wallet.ts').then((w) => w.extensionAvailable().then(setExtension), () => setExtension(false))
+    import('./ledger/wallet.ts').then(
+      (w) => {
+        w.extensionWallets().then(setExtensions, () => setExtensions([]))
+        w.extensionAvailable().then(setAnyExtension, () => setAnyExtension(false))
+      },
+      () => setAnyExtension(false),
+    )
   }, [open])
 
   const customGateway = !!import.meta.env.VITE_WALLET_GATEWAY_URL
-  const options: Array<{ kind: WalletKind; name: string; detail: string; available: boolean; note?: string }> = [
+  type Option = { key: string; kind: WalletKind; extension?: ExtensionWallet; name: string; icon?: string; detail: string; available: boolean; note?: string }
+  const browserWallets: Option[] = extensions.length
+    ? extensions.map((x) => ({ key: `ext:${x.id}`, kind: 'extension', extension: x, name: x.name, icon: x.icon, detail: 'Installed in this browser.', available: true, note: 'browser extension' }))
+    : [
+        {
+          key: 'extension',
+          kind: 'extension',
+          name: 'Browser wallet',
+          detail: 'Any CIP-0103 wallet installed in this browser.',
+          available: anyExtension,
+          note: anyExtension ? 'detected' : 'none installed',
+        },
+      ]
+  const options: Option[] = [
     {
+      key: 'loop',
       kind: 'loop',
       name: 'Loop',
       detail: `Five North’s Canton wallet. Swaps any token ${VENUE ?? 'Cantex'} lists.`,
       available: !!NETWORK.loop,
       note: NETWORK.loop ? `Loop ${NETWORK.loop}` : 'on TestNet and MainNet',
     },
+    ...browserWallets,
     {
-      kind: 'extension',
-      name: 'Browser wallet',
-      detail: 'Any CIP-0103 wallet installed in this browser.',
-      available: extension,
-      note: extension ? 'detected' : 'none installed',
-    },
-    {
+      key: 'gateway',
       kind: 'gateway',
       name: 'Wallet Gateway',
       detail: NETWORK.gateway ? 'The reference CIP-0103 wallet, running next to LocalNet.' : 'Your organisation’s CIP-0103 Wallet Gateway.',
@@ -270,10 +287,13 @@ function ConnectDialog() {
       note: NETWORK.gateway || customGateway ? GATEWAY_URL.replace(/\/api.*$/, '') : 'set VITE_WALLET_GATEWAY_URL',
     },
   ]
-  const pick = async (kind: WalletKind) => {
+  // which option the user picked, to show the wait on it
+  const [picked, setPicked] = useState<string>()
+  const pick = async (o: Option) => {
     setError(undefined)
+    setPicked(o.key)
     try {
-      await connect(kind)
+      await connect(o.kind, o.extension)
     } catch (e) {
       setError(errorText(e))
     }
@@ -290,12 +310,16 @@ function ConnectDialog() {
           </Dialog.Description>
           <ul className="wallet-options">
             {options.map((o) => (
-              <li key={o.kind}>
-                <button disabled={!o.available || wallet.phase === 'connecting'} onClick={() => pick(o.kind)}>
-                  <span className="wallet-name">{o.name}</span>
+              <li key={o.key}>
+                <button disabled={!o.available || wallet.phase === 'connecting'} onClick={() => pick(o)}>
+                  <span className="wallet-name">
+                    {/* an extension's own icon, when it is inline data (the site's CSP allows no other images) */}
+                    {o.icon?.startsWith('data:image/') && <img className="wallet-icon" src={o.icon} alt="" width={18} height={18} />}
+                    {o.name}
+                  </span>
                   <span className="muted small">{o.detail}</span>
                   {o.note && <span className="wallet-note mono small">{o.note}</span>}
-                  {wallet.phase === 'connecting' && wallet.kind === o.kind && <span className="wallet-note small">waiting for the wallet…</span>}
+                  {wallet.phase === 'connecting' && picked === o.key && <span className="wallet-note small">waiting for the wallet…</span>}
                 </button>
               </li>
             ))}

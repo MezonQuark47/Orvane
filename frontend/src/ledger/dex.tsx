@@ -27,7 +27,7 @@ import {
   type WithdrawRequest,
 } from '../../../shared/dex.ts'
 import { HttpRegistry, type Registry } from '../../../shared/registry.ts'
-import type { WalletKind, WalletSession } from './wallet.ts'
+import type { ExtensionWallet, WalletKind, WalletSession } from './wallet.ts'
 import { NETWORK } from './network.ts'
 
 export interface Instrument extends InstrumentId {
@@ -120,7 +120,8 @@ export interface DexState {
   pools: Map<string, PoolLive>
   wallet: WalletState
   party?: string
-  connect: (kind: WalletKind) => Promise<void>
+  /** `extension` picks one browser-extension wallet when several are installed */
+  connect: (kind: WalletKind, extension?: ExtensionWallet) => Promise<void>
   disconnect: () => Promise<void>
   mine: Mine
   /** the user's contracts have been read at least once since connecting */
@@ -233,7 +234,7 @@ export function DexProvider({ children }: { children: ReactNode }) {
 
   // ---- wallet ----
   const connect = useCallback(
-    async (kind: WalletKind) => {
+    async (kind: WalletKind, extension?: ExtensionWallet) => {
       setWallet({ phase: 'connecting', kind })
       try {
         // the wallet SDKs are large; load them only when someone connects
@@ -242,11 +243,12 @@ export function DexProvider({ children }: { children: ReactNode }) {
           kind === 'gateway'
             ? await w.connectGateway()
             : kind === 'extension'
-              ? await w.connectExtension()
+              ? await w.connectExtension(extension)
               : await w.connectLoop(NETWORK.loop ?? 'testnet')
         setWallet({ phase: 'connected', session: s })
         try {
-          localStorage.setItem(WALLET_KEY, kind)
+          // an extension is remembered by its id, so the same one comes back
+          localStorage.setItem(WALLET_KEY, extension ? `extension:${extension.id}` : kind)
         } catch {
           /* storage blocked: the user reconnects next time */
         }
@@ -283,6 +285,16 @@ export function DexProvider({ children }: { children: ReactNode }) {
       /* no storage */
     }
     if (kind === 'gateway' || kind === 'loop' || kind === 'extension') connect(kind).catch(() => setWallet({ phase: 'idle' }))
+    else if (kind?.startsWith('extension:')) {
+      const id = kind.slice('extension:'.length)
+      import('./wallet.ts')
+        .then((w) => w.extensionWallets())
+        .then((found) => {
+          const ext = found.find((x) => x.id === id)
+          if (ext) return connect('extension', ext)
+        })
+        .catch(() => setWallet({ phase: 'idle' }))
+    }
   }, [status, connect])
 
   // ---- the user's own contracts ----
