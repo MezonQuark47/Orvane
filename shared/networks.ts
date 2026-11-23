@@ -1,12 +1,13 @@
 // The networks Orvane runs on and what it uses on each.
 //
-// Swaps go through Cantex Connect, which runs on TestNet and MainNet. The
+// Swaps go through Cantex Connect, which runs on TestNet and MainNet. Cantex
+// has no DevNet, so there swaps go through OneSwap instead, for testing. The
 // Orvane pool (self-custodial liquidity) is kept for later and only runs on
 // LocalNet, behind the `pool` flag.
 
 import type { Instrument } from './cantex.ts'
 
-export type NetworkId = 'localnet' | 'testnet' | 'mainnet'
+export type NetworkId = 'localnet' | 'devnet' | 'testnet' | 'mainnet'
 
 export interface NetworkInfo {
   id: NetworkId
@@ -25,8 +26,13 @@ export interface NetworkInfo {
     /** the outside market price Orvane compares pool prices with */
     referenceMarket: string
   }
+  /**
+   * OneSwap, DevNet only. `api` is Orvane's own forwarder (api/oneswap.ts),
+   * which adds the integrator key OneSwap needs to open a swap.
+   */
+  oneswap?: { api: string }
   /** Five North Loop's network name */
-  loop?: 'testnet' | 'mainnet'
+  loop?: 'devnet' | 'testnet' | 'mainnet'
   /** the CIP-0103 Wallet Gateway (LocalNet) */
   gateway: boolean
   /** Orvane's own pool, kept for later */
@@ -47,6 +53,16 @@ export const NETWORKS: Record<NetworkId, NetworkInfo> = {
     gateway: true,
     pool: true,
     // LocalNet's DSO changes with every fresh LocalNet; the app reads it from the operator
+    cc: { admin: '', id: 'Amulet' },
+  },
+  devnet: {
+    id: 'devnet',
+    label: 'Canton DevNet',
+    oneswap: { api: '/api/oneswap' },
+    loop: 'devnet',
+    gateway: false,
+    pool: false,
+    // read from OneSwap's pools at runtime
     cc: { admin: '', id: 'Amulet' },
   },
   testnet: {

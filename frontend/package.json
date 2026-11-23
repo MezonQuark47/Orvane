@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite",
     "dev:mainnet": "vite --mode mainnet",
+    "dev:devnet": "vite --mode devnet",
     "dev:localnet": "vite --mode localnet",
     "build": "tsc -b && vite build",
     "build:mainnet": "tsc -b && vite build --mode mainnet",
+    "build:devnet": "tsc -b && vite build --mode devnet",
     "lint": "eslint .",
     "preview": "vite preview"
   },

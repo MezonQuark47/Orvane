@@ -74,6 +74,7 @@ cd frontend
 npm install
 npm run dev            # Canton TestNet, http://localhost:5173
 npm run dev:mainnet    # Canton MainNet
+npm run dev:devnet     # Canton DevNet, swaps through OneSwap (DEPLOY.md)
 ```
 
 There is no Orvane server on the swap path: the app talks to Cantex's public API and to the user's wallet. To swap

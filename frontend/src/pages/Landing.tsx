@@ -6,7 +6,7 @@ import { motion } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toNumber } from '../../../shared/decimal.ts'
 import { useDex } from '../ledger/dex.tsx'
-import { NETWORK } from '../ledger/network.ts'
+import { NETWORK, VENUE } from '../ledger/network.ts'
 import { useMarket } from '../swap/market.tsx'
 import { VaultStage, type StageScene } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
@@ -21,7 +21,7 @@ export default function Landing({ go }: { go: Go }) {
   return (
     <div className="landing">
       <Hero go={go} />
-      {(NETWORK.cantex ? SWAP_CHAPTERS : CHAPTERS).map((c, i) => (
+      {(VENUE ? SWAP_CHAPTERS : CHAPTERS).map((c, i) => (
         <Chapter key={c.id} chapter={c} flip={i % 2 === 1} go={go} />
       ))}
       <Finale go={go} />
@@ -31,7 +31,7 @@ export default function Landing({ go }: { go: Go }) {
 
 // ---------------------------------------------------------------- hero
 
-const HEADLINE = NETWORK.cantex
+const HEADLINE = VENUE
   ? [
       ['Swap', 'on', 'Canton,'],
       ['checked', 'twice.'],
@@ -53,7 +53,7 @@ function Hero({ go }: { go: Go }) {
     <section className="ln-hero">
       <VaultStage scene="hero" className="ln-hero-stage" />
       <motion.p className="ln-kicker" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8, ease, delay: 0.2 }}>
-        <span className="ln-pip" /> {NETWORK.cantex ? 'Swaps on the Canton Network, from your own wallet' : 'The exchange on the Canton Network'}
+        <span className="ln-pip" /> {VENUE ? 'Swaps on the Canton Network, from your own wallet' : 'The exchange on the Canton Network'}
       </motion.p>
       <h1 className="ln-mega">
         {HEADLINE.map((line, li) => (
@@ -74,8 +74,8 @@ function Hero({ go }: { go: Go }) {
       </h1>
       <motion.div className="ln-hero-foot" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, ease, delay: 1.1 }}>
         <p className="ln-lede">
-          {NETWORK.cantex
-            ? `Any token Cantex lists, straight from your wallet into Canton's deepest pools. Orvane prices every swap itself and checks it again just before your wallet opens. No account, no fee.${NETWORK.proxy ? '' : ' Nothing kept.'}`
+          {VENUE
+            ? `Any token ${VENUE} lists, straight from your wallet into its pools. Orvane prices every swap itself and checks it again just before your wallet opens. No account, no fee.${NETWORK.proxy ? '' : ' Nothing kept.'}`
             : 'Swap Canton Coin in one atomic transaction. Provide liquidity without handing it to anyone: it stays in your account, and comes back on its own at the end of its term.'}
         </p>
         <div className="ln-ctas">
@@ -113,10 +113,10 @@ function ago(ms: number) {
 }
 
 function Ticker() {
-  return NETWORK.cantex ? <MarketTicker /> : <PoolTicker />
+  return VENUE ? <MarketTicker /> : <PoolTicker />
 }
 
-// Cantex's market, live: what Orvane swaps against.
+// The venue's market, live: what Orvane swaps against.
 function MarketTicker() {
   const market = useMarket()
   const ref = NETWORK.cantex ? market.prices[NETWORK.cantex.referenceMarket] : undefined
@@ -251,7 +251,7 @@ function LiquidityCard() {
   )
 }
 
-// What a swap of Canton Coin gets right now, from Cantex's live pools.
+// What a swap of Canton Coin gets right now, from the venue's live pools.
 function RouteCard() {
   const market = useMarket()
   const cc = market.cc
@@ -326,7 +326,7 @@ const SWAP_CHAPTERS: ChapterData[] = [
         <em>Canton's deepest pools.</em>
       </>
     ),
-    body: "Pick any token Cantex lists and swap it from the wallet you already use. Your wallet sends it straight to Cantex's pools and the output comes straight back. Orvane never holds anything and charges nothing.",
+    body: `Pick any token ${VENUE} lists and swap it from the wallet you already use. Your wallet sends it straight to ${VENUE}'s pools and the output comes straight back. Orvane never holds anything and charges nothing.`,
     Card: RouteCard,
   },
   {
@@ -437,7 +437,7 @@ function Finale({ go }: { go: Go }) {
             Enter the vault <Arrow />
           </button>
           <a className="ln-ghost" href={REPO} target="_blank" rel="noreferrer">
-            {NETWORK.cantex ? 'Read the code ↗' : 'Read the Daml ↗'}
+            {VENUE ? 'Read the code ↗' : 'Read the Daml ↗'}
           </a>
         </div>
       </motion.div>

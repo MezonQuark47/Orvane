@@ -11,7 +11,7 @@ import { errorText } from './ui/errors.ts'
 import Landing from './pages/Landing.tsx'
 import Portfolio from './pages/Portfolio.tsx'
 import Swap from './pages/Swap.tsx'
-import { NETWORK } from './ledger/network.ts'
+import { NETWORK, VENUE } from './ledger/network.ts'
 import { MarketProvider, useMarket } from './swap/market.tsx'
 
 const Vault = lazy(() => import('./three/Vault.tsx'))
@@ -157,7 +157,7 @@ function Shell() {
               {status === 'ready' && (
                 <>
                   {tab === 'swap' &&
-                    (NETWORK.cantex ? (
+                    (VENUE ? (
                       <Swap />
                     ) : (
                       <Suspense fallback={<PageSkeleton />}>
@@ -180,7 +180,7 @@ function Shell() {
           {/* swaps through Loop are token standard V1 transfers; the Orvane pool (LocalNet) runs on V2 */}
           <span>Daml · Canton Network · token standard {NETWORK.pool ? 'V2' : 'V1'}</span>
           <span className="sep" />
-          <span>{status === 'ready' && market.status !== 'offline' ? `${NETWORK.label}${NETWORK.cantex ? ' · Cantex liquidity' : ''}` : status === 'connecting' ? 'Connecting…' : 'Offline'}</span>
+          <span>{status === 'ready' && market.status !== 'offline' ? `${NETWORK.label}${VENUE ? ` · ${VENUE} liquidity` : ''}` : status === 'connecting' ? 'Connecting…' : 'Offline'}</span>
           <span className={`live ${status}`} aria-hidden />
         </footer>
       </div>
@@ -251,7 +251,7 @@ function ConnectDialog() {
     {
       kind: 'loop',
       name: 'Loop',
-      detail: 'Five North’s Canton wallet. Swaps any token Cantex lists.',
+      detail: `Five North’s Canton wallet. Swaps any token ${VENUE ?? 'Cantex'} lists.`,
       available: !!NETWORK.loop,
       note: NETWORK.loop ? `Loop ${NETWORK.loop}` : 'on TestNet and MainNet',
     },

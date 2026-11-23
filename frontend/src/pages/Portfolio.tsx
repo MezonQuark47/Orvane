@@ -10,7 +10,7 @@ import { answerIncoming, takeBack } from '../ledger/orders.ts'
 import { VaultStage } from '../three/stage.tsx'
 import { useActivity } from '../ui/activity.tsx'
 import { ConnectFirst, Panel, Rolling, SkeletonList, TokenIcon, fmt, shortParty } from '../ui/bits.tsx'
-import { NETWORK } from '../ledger/network.ts'
+import { NETWORK, VENUE } from '../ledger/network.ts'
 import { useMarket } from '../swap/market.tsx'
 import { errorText } from '../ui/errors.ts'
 import { dateTime } from '../ui/time.ts'
@@ -23,7 +23,7 @@ export default function Portfolio() {
 
   const market = useMarket()
   // every token this network trades, plus anything else the wallet holds
-  const listed = NETWORK.cantex
+  const listed = VENUE
     ? market.tokens.map((t) => ({ key: t.symbol, label: t.symbol, admin: t.admin, id: t.id }))
     : Object.entries(config?.instruments ?? {}).map(([key, i]) => ({ key, ...i }))
   const extra = mine.holdings
@@ -39,7 +39,7 @@ export default function Portfolio() {
       locked: toNumber(hs.filter((h) => h.locked).reduce((s, h) => s + h.amount, ZERO)),
     }
   })
-  // value everything in Canton Coin at Cantex pool prices (or, on LocalNet,
+  // value everything in Canton Coin at the venue's pool prices (or, on LocalNet,
   // in the Orvane pool's second asset)
   const priceInCc = (i: { admin: string; id: string }) => {
     const cc = market.cc
@@ -51,13 +51,13 @@ export default function Portfolio() {
     return other > 0 ? ccSide / other : 0
   }
   const priceOf = (i: { admin: string; id: string }) => {
-    if (NETWORK.cantex) return priceInCc(i)
+    if (VENUE) return priceInCc(i)
     if (!pool || !live || live.reserveA === ZERO) return 0
     if (sameInstrument(i, pool.instrumentB)) return 1
     if (sameInstrument(i, pool.instrumentA)) return toNumber(live.reserveB) / toNumber(live.reserveA)
     return 0
   }
-  const unit = NETWORK.cantex ? 'CC' : pool ? instrument(pool.instrumentB).label : ''
+  const unit = VENUE ? 'CC' : pool ? instrument(pool.instrumentB).label : ''
   const ccUsd = NETWORK.cantex ? market.prices[NETWORK.cantex.referenceMarket]?.price : undefined
   const worth = totals.reduce((s, t) => s + (t.free + t.locked) * priceOf(t), 0)
 
@@ -98,7 +98,7 @@ export default function Portfolio() {
           </motion.span>
         </h1>
         <div className="networth">
-          <span className="muted small">{NETWORK.cantex ? 'Total value, at Cantex pool prices' : 'Total value, at the pool price'}</span>
+          <span className="muted small">{VENUE ? `Total value, at ${VENUE} pool prices` : 'Total value, at the pool price'}</span>
           <div>
             <Rolling value={worth} digits={4} className="big mono" /> <span className="unit">{unit}</span>
           </div>

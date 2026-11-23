@@ -43,7 +43,11 @@ const cp = (amountIn: Dec, reserveIn: Dec, reserveOut: Dec) => div(mul(reserveOu
 
 export function checkQuote(q: Quote, pools: PoolState[], cc: Instrument, toleranceBps = 5): QuoteCheck {
   const x = dec(q.sell.amount)
-  const network = sameInstrument(q.networkFee, cc) ? dec(q.networkFee.amount) : ZERO
+  // OneSwap (DevNet) takes its network fee from the input, in the input token,
+  // before the pool fee; it has no Connect fee and no multi-hop routes
+  const oneswap = q.model === 'oneswap'
+  const carved = oneswap ? dec(q.networkFee.amount) : ZERO
+  const network = !oneswap && sameInstrument(q.networkFee, cc) ? dec(q.networkFee.amount) : ZERO
   const connect = dec(q.feePercentage) - sum(q.hops.map((h) => dec(h.feeRate)))
   const sellsCc = sameInstrument(q.sell, cc)
   const buysCc = sameInstrument(q.returned, cc)
@@ -52,7 +56,7 @@ export function checkQuote(q: Quote, pools: PoolState[], cc: Instrument, toleran
   // route passes through Canton Coin; Cantex's quotes for such routes have
   // been seen both with and without it, so both readings are computed.
   const walk = (feesAtCc: boolean) => {
-    let amount = x
+    let amount = x - carved
     let ideal = x
     const hops: HopCheck[] = []
     q.hops.forEach((h, i) => {

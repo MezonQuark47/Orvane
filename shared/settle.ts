@@ -13,7 +13,7 @@
 import { dec, show, type Dec } from './decimal.ts'
 import { sameInstrument, type Amount, type Instrument } from './cantex.ts'
 
-export type SwapStatus = 'sending' | 'unconfirmed' | 'pending' | 'filled' | 'failed'
+export type SwapStatus = 'sending' | 'unconfirmed' | 'pending' | 'filled' | 'failed' | 'refunded'
 
 export interface SettledSwap {
   id: string

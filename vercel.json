@@ -10,7 +10,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://api.cantex.io wss://api.cantex.io https://api.testnet.cantex.io wss://api.testnet.cantex.io https://cantonloop.com wss://cantonloop.com https://testnet.cantonloop.com wss://testnet.cantonloop.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://api.cantex.io wss://api.cantex.io https://api.testnet.cantex.io wss://api.testnet.cantex.io https://cantonloop.com wss://cantonloop.com https://testnet.cantonloop.com wss://testnet.cantonloop.com https://devnet.cantonloop.com wss://devnet.cantonloop.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
         },
         { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },

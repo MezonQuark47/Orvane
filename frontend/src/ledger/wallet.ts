@@ -175,7 +175,7 @@ interface LoopTransferRequest {
   instrument: { instrument_admin: string; instrument_id: string }
   requested_at: string
   execute_before: string
-  memo: string
+  memo?: string
 }
 
 interface LoopPrepared {
@@ -212,7 +212,7 @@ async function untilAnswered(run: () => Promise<LoopRun | undefined>): Promise<v
 let loopNetwork: string | undefined
 let loopNative: LoopNative | undefined
 
-export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<WalletSession> {
+export async function connectLoop(network: 'devnet' | 'testnet' | 'mainnet'): Promise<WalletSession> {
   if (loopNetwork !== network) {
     loop.init({
       appName: 'Orvane',
@@ -242,7 +242,7 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
       instrument: { instrument_admin: instrument.admin, instrument_id: instrument.id },
       requested_at: new Date(now).toISOString(),
       execute_before: new Date(now + SWAP_TRANSFER_TTL_MS).toISOString(),
-      memo,
+      ...(memo ? { memo } : {}),
     })
   }
   // only ever one plain V1 transfer goes into the proxy
@@ -253,7 +253,7 @@ export async function connectLoop(network: 'testnet' | 'mainnet'): Promise<Walle
   })
   return {
     ...s,
-    walletUrl: network === 'mainnet' ? 'https://wallet.looptech.io' : 'https://wallet.testnet.looptech.io',
+    walletUrl: { mainnet: 'https://wallet.looptech.io', testnet: 'https://wallet.testnet.looptech.io', devnet: 'https://wallet.devnet.looptech.io' }[network],
     transfer: async (recipient, amount, instrument, memo) => {
       const now = Date.now()
       await untilAnswered(() =>

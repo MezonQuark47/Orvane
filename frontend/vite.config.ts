@@ -11,12 +11,28 @@ export default defineConfig(({ mode }) => {
   // absolute links): VITE_SITE_URL, else Vercel's production address, else
   // relative links
   const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL
-  const site = (loadEnv(mode, process.cwd(), 'VITE_').VITE_SITE_URL || (vercel ? `https://${vercel}` : '')).replace(/\/$/, '')
+  const env = loadEnv(mode, process.cwd(), '')
+  const site = (env.VITE_SITE_URL || (vercel ? `https://${vercel}` : '')).replace(/\/$/, '')
+  // OneSwap's integrator key, for DevNet swaps; read here only, never bundled
+  const oneswapKey = env.ONESWAP_API_KEY
   return {
     plugins: [react(), { name: 'site-url', transformIndexHtml: (html: string) => html.replaceAll('%SITE_URL%', site) }],
     server: {
       port: 5173,
       proxy: {
+        // what api/oneswap.ts does on Vercel: OneSwap's DevNet API, with the key
+        '/api/oneswap': {
+          target: 'https://devnet.api.oneswap.cc',
+          changeOrigin: true,
+          headers: oneswapKey ? { 'x-sdk-key': oneswapKey } : undefined,
+          rewrite: (p: string) => {
+            const u = new URL(p, 'http://local')
+            const path = u.searchParams.get('path') ?? ''
+            u.searchParams.delete('path')
+            const query = u.searchParams.toString()
+            return `/swapv2${path}${query ? `?${query}` : ''}`
+          },
+        },
         '/api': process.env.ORVANE_OPERATOR_URL ?? 'http://localhost:7600',
       },
       fs: { allow: ['..'] },

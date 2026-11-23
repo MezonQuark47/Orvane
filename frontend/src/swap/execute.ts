@@ -1,22 +1,26 @@
-// One swap through Cantex Connect, start to finish:
+// One swap, start to finish:
 //
 //   1. quote again and check it: against the quote the user saw (their
 //      slippage limit), against Orvane's own pricing from the pools, and for
 //      a price impact the user has not accepted
-//   2. send the sell token to Cantex's swap party, with the buy token as memo
-//      (Loop prepares the transfer itself; other wallets get one built from
-//      the token's registry). Where Orvane's proxy is set up, the same
+//   2. send the sell token to the venue. Cantex (TestNet, MainNet): to its
+//      swap party, with the buy token as memo. OneSwap (DevNet): to the
+//      deposit party of a swap opened first, held to the user's minimum.
+//      Loop prepares the transfer itself; other wallets get one built from
+//      the token's registry. Where Orvane's proxy is set up, the same
 //      transfer runs through it so Orvane's party confirms it (shared/proxy.ts)
-//   3. watch the user's own balance until the output arrives. If the wallet
-//      never said whether it sent the transfer, first watch for the sell
-//      token to leave the wallet (shared/settle.ts)
+//   3. watch until the output arrives: OneSwap reports its swap's state;
+//      for Cantex, the user's own balance. If the wallet never said whether
+//      it sent the transfer, first watch for the sell token to leave the
+//      wallet (shared/settle.ts)
 //
 // Cantex fills at the pool price when the transfer arrives and its quote is
 // not binding, so step 1 is the trader's protection.
 
 import { show, dec, ZERO, type Dec } from '../../../shared/decimal.ts'
-import { sameInstrument, type Instrument, type PoolState, type Quote, type CantexApi } from '../../../shared/cantex.ts'
-import { checkQuote, guardFreshQuote, CONFIRM_IMPACT_BPS, MAX_IMPACT_BPS, SWAP_TRANSFER_TTL_MS, type QuoteCheck } from '../../../shared/quote.ts'
+import { sameInstrument, type Instrument, type PoolState, type Quote, type SwapVenue } from '../../../shared/cantex.ts'
+import { OneSwapApi, TERMINAL, type OneSwapOrder } from '../../../shared/oneswap.ts'
+import { checkQuote, guardFreshQuote, minimumOut, CONFIRM_IMPACT_BPS, MAX_IMPACT_BPS, SWAP_TRANSFER_TTL_MS, type QuoteCheck } from '../../../shared/quote.ts'
 import { arrived, moved, sent, settle, type SettledSwap } from '../../../shared/settle.ts'
 import { basicAccount } from '../../../shared/dex.ts'
 import { dedupeDisclosed } from '../../../shared/registry.ts'
@@ -68,7 +72,7 @@ const watching = new Set<string>()
 
 export async function executeSwap(
   dex: DexState,
-  api: CantexApi,
+  api: SwapVenue,
   seen: Quote,
   opts: {
     slippageBps: number
@@ -80,8 +84,8 @@ export async function executeSwap(
 ): Promise<SwapResult> {
   const session = dex.wallet.phase === 'connected' ? dex.wallet.session : undefined
   if (!session || !dex.party) throw new SwapBlocked('Connect a wallet first.')
-  const swapParty = NETWORK.cantex?.swapParty
-  if (!swapParty) throw new SwapBlocked('Swaps are not available on this network.')
+  const oneswap = api instanceof OneSwapApi ? api : undefined
+  if (!oneswap && !NETWORK.cantex) throw new SwapBlocked('Swaps are not available on this network.')
   const party = dex.party
   const sell: Instrument = seen.sell
   const buy: Instrument = seen.returned
@@ -94,10 +98,10 @@ export async function executeSwap(
   for (let attempt = 0; attempt < 2; attempt++) {
     const [q, pools] = await Promise.all([api.quote(sell, buy, seen.sell.amount), api.pools()])
     fresh = q
-    checked = checkPools(q, pools, opts.cc)
+    checked = checkPools(api.name, q, pools, opts.cc)
     if ('check' in checked) break
   }
-  if (!fresh || !checked) throw new SwapBlocked('No quote from Cantex.')
+  if (!fresh || !checked) throw new SwapBlocked(`No quote from ${api.name}.`)
   if ('problem' in checked) throw new SwapBlocked(checked.problem)
   const guard = guardFreshQuote(seen, fresh, opts.slippageBps)
   if (!guard.ok) throw new SwapBlocked(guard.reason)
@@ -110,12 +114,31 @@ export async function executeSwap(
     throw new SwapBlocked(`The price impact is now ${impactText(impact)}. Accept it to swap; nothing was sent.`)
   }
   if (dec(seen.sell.amount) > freeOf(dex.latest(), sell)) throw new SwapBlocked('Not enough balance for this swap.')
+
+  // OneSwap: open the swap first. Its deposit party is where the input goes,
+  // and it is held to the minimum of the quote the user saw.
+  let order: OneSwapOrder | undefined
+  if (oneswap) {
+    try {
+      order = await oneswap.order(party, fresh, show(minimumOut(dec(seen.returned.amount), opts.slippageBps)))
+    } catch (e) {
+      throw new SwapBlocked(`${e instanceof Error ? e.message : String(e)} Nothing was sent.`)
+    }
+  }
+  const recipient = order?.depositParty ?? NETWORK.cantex!.swapParty
+  const memo = order ? '' : fresh.memo
+  // a swap OneSwap opened that never gets its deposit is closed again
+  const dropOrder = () => (order ? oneswap!.cancel(order.id).catch(() => {}) : undefined)
+
   // Loop stops a transaction to ask for a fee top-up and drops it, so the fee
   // balance is checked here, before the wallet is asked to sign
   const via = session.transferVia ? await orvaneProxy() : undefined
   if (session.fees) {
-    const fee = await session.fees(via, swapParty, seen.sell.amount, sell, fresh.memo).catch(() => undefined)
-    if (fee?.topUp) throw new SwapBlocked(topUpMessage(fee, session.name))
+    const fee = await session.fees(via, recipient, seen.sell.amount, sell, memo).catch(() => undefined)
+    if (fee?.topUp) {
+      await dropOrder()
+      throw new SwapBlocked(topUpMessage(fee, session.name))
+    }
   }
 
   // 2. send it
@@ -132,7 +155,7 @@ export async function executeSwap(
       if (via && session.transferVia) {
         try {
           route = 'orvane'
-          await session.transferVia(via, swapParty, seen.sell.amount, sell, fresh.memo)
+          await session.transferVia(via, recipient, seen.sell.amount, sell, memo)
         } catch (e) {
           if (e instanceof FeeShortfall) throw new SwapBlocked(topUpMessage(e.fee, session.name))
           // the user's node cannot run the proxy; nothing was signed, so send it plainly
@@ -141,13 +164,14 @@ export async function executeSwap(
         }
       }
       if (route === 'direct') {
-        if (session.transfer) await session.transfer(swapParty, seen.sell.amount, sell, fresh.memo)
-        else await registryTransfer(dex, session.party, swapParty, seen.sell.amount, sell, fresh.memo)
+        if (session.transfer) await session.transfer(recipient, seen.sell.amount, sell, memo)
+        else await registryTransfer(dex, session.party, recipient, seen.sell.amount, sell, memo)
       }
     } catch (e) {
       // declined, or rejected by the ledger: nothing moved
       if (!(e instanceof OutcomeUnknown)) {
         updateSwap(party, id, { status: 'failed' })
+        await dropOrder()
         throw e
       }
       answered = false
@@ -163,6 +187,37 @@ export async function executeSwap(
     let end = Date.now() + (isSent ? FILL_WAIT_MS : CONFIRM_WAIT_MS)
     const quoted = dec(fresh.returned.amount)
     while (Date.now() < end) {
+      // OneSwap says where its swap stands
+      if (order) {
+        const s = await oneswap!.getSwap(order.id).catch(() => undefined)
+        if (s && s.status !== 'awaiting_deposit' && !isSent) {
+          isSent = true
+          updateSwap(party, id, { status: 'pending' })
+          noteSale()
+          opts.onStage('settling')
+          end = Date.now() + FILL_WAIT_MS
+        }
+        if (s?.status === 'returned' && s.amountOut != null) {
+          const got = dec(s.amountOut.toFixed(10))
+          updateSwap(party, id, { status: 'filled', received: show(got) })
+          reviseSwaps(party, (rs) => moved(rs, id, buy, got))
+          return { status: 'filled', quoted, received: got, id, at: record.at }
+        }
+        if (s && TERMINAL.includes(s.status)) {
+          // refunded, expired, failed or cancelled: no output is coming
+          updateSwap(party, id, { status: isSent ? 'refunded' : 'failed' })
+          const why = s.error ? ` (${s.error})` : ''
+          throw new SwapBlocked(
+            !isSent
+              ? `The swap closed before anything arrived (${s.status}). Nothing was sent.`
+              : s.status === 'refunded'
+                ? `OneSwap could not fill the swap and refunded your input${why}.`
+                : `OneSwap closed the swap without filling it (${s.status})${why}. Check your wallet for the refund.`,
+          )
+        }
+        await new Promise((r) => setTimeout(r, 2_000))
+        continue
+      }
       await dex.refresh().catch(() => {})
       const m = dex.latest()
       // an empty read is a failed read: the wallet still holds something
@@ -195,13 +250,13 @@ export function settleOpenSwaps(party: string, m: Mine) {
   reviseSwaps(party, (records) => settle(records, (i) => freeOf(m, i), Date.now(), WATCH_MS, (id) => watching.has(id)))
 }
 
-// Orvane's own pricing must not find Cantex's quote better than the pools
+// Orvane's own pricing must not find the venue's quote better than the pools
 // allow, and the quote must not be far worse than the pools give.
-function checkPools(q: Quote, pools: PoolState[], cc: Instrument): { check: QuoteCheck } | { problem: string } {
+function checkPools(venue: string, q: Quote, pools: PoolState[], cc: Instrument): { check: QuoteCheck } | { problem: string } {
   try {
     const c = checkQuote(q, pools, cc, 25)
     if (c.agrees) return { check: c }
-    return { problem: `Cantex's quote (${show(c.quoted)}) does not match the pools (${show(c.expected)}). Nothing was sent; try again in a moment.` }
+    return { problem: `${venue}'s quote (${show(c.quoted)}) does not match the pools (${show(c.expected)}). Nothing was sent; try again in a moment.` }
   } catch (e) {
     return { problem: e instanceof Error ? e.message : String(e) }
   }

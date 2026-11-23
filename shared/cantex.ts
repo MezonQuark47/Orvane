@@ -54,9 +54,21 @@ export interface Quote {
   priceImpact: string
   poolPriceBefore: string
   poolPriceAfter: string
+  /** NaN where the venue gives no estimate */
   estimatedSeconds: number
   hops: QuoteHop[]
   receivedAt: number
+  /** whose pricing rules the quote follows; Cantex's when absent */
+  model?: 'cantex' | 'oneswap'
+}
+
+/** Where swaps fill: Cantex Connect, or OneSwap on DevNet (shared/oneswap.ts). */
+export interface SwapVenue {
+  readonly name: string
+  swapTokens(): Promise<Token[]>
+  pools(): Promise<PoolState[]>
+  policy(): Promise<ExchangePolicy>
+  quote(sell: Instrument, buy: Instrument, sellAmount: string): Promise<Quote>
 }
 
 export interface ExchangePolicy {
@@ -81,7 +93,8 @@ const amountOf = (x: { amount: string; instrument_admin: string; instrument_id: 
 
 export const sameInstrument = (a: Instrument, b: Instrument) => a.admin === b.admin && a.id === b.id
 
-export class CantexApi {
+export class CantexApi implements SwapVenue {
+  readonly name = 'Cantex'
   readonly base: string
   constructor(base: string) {
     this.base = base.replace(/\/$/, '')

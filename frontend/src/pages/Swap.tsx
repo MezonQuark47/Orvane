@@ -1,6 +1,6 @@
-// Swap: any token Cantex lists, from your own wallet.
+// Swap: any token the venue lists (Cantex; OneSwap on DevNet), from your own wallet.
 //
-// Cantex supplies the pools; everything here is Orvane's: the live quote and
+// The venue supplies the pools; everything here is Orvane's: the live quote and
 // its own check of it against the pools, the guard that re-prices right
 // before you sign, the transfer from your wallet, and the tracker that
 // watches your balance until the output lands.
@@ -11,7 +11,7 @@ import { ZERO, dec, show, toNumber, type Dec } from '../../../shared/decimal.ts'
 import { sameInstrument, type Instrument, type PoolState, type Quote, type Token } from '../../../shared/cantex.ts'
 import { CONFIRM_IMPACT_BPS, MAX_IMPACT_BPS, SWAP_TRANSFER_TTL_MS, checkQuote, deviationBps, minimumOut } from '../../../shared/quote.ts'
 import { useDex } from '../ledger/dex.tsx'
-import { NETWORK } from '../ledger/network.ts'
+import { NETWORK, VENUE } from '../ledger/network.ts'
 import type { LoopAccount } from '../ledger/wallet.ts'
 import type { FeeStatus } from '../ledger/fees.ts'
 import { useMarket } from '../swap/market.tsx'
@@ -111,7 +111,7 @@ export default function Swap() {
           setQuoteError(undefined)
         }
       } catch (e) {
-        if (alive && seq === quoteSeq.current) setQuoteError(e instanceof Error ? e.message.replace(/^Cantex: /, '') : String(e))
+        if (alive && seq === quoteSeq.current) setQuoteError(e instanceof Error ? e.message.replace(/^(Cantex|OneSwap): /, '') : String(e))
       }
       if (alive) timer = setTimeout(run, REQUOTE_MS)
     }
@@ -191,8 +191,9 @@ export default function Swap() {
   const belowMin = !!sell && !!cc && sameInstrument(sell, cc) && amount > ZERO && amount < ccMin
   // Cantex needs a pre-approval for the token it sends back. A Canton Coin
   // pre-approval covers Canton Coin only; other tokens need their own, from
-  // their issuer (Loop lists those by instrument admin).
-  const canReceive = !account || !buy || !cc ? true : sameInstrument(buy, cc) ? account.hasPreapproval : account.preapprovalAdmins.includes(buy.admin)
+  // their issuer (Loop lists those by instrument admin). OneSwap does not
+  // document such a need, so DevNet does not check it.
+  const canReceive = !account || !buy || !cc || NETWORK.oneswap ? true : sameInstrument(buy, cc) ? account.hasPreapproval : account.preapprovalAdmins.includes(buy.admin)
   const impact = check?.priceImpactBps ?? 0
   const tooThin = !!check && impact > MAX_IMPACT_BPS
   const steep = !!check && impact > CONFIRM_IMPACT_BPS && !tooThin
@@ -229,7 +230,7 @@ export default function Swap() {
                 : stage === 'confirming'
                   ? `${walletName} did not confirm it. Checking whether it was sent…`
                   : stage === 'settling'
-                    ? 'Sent. Cantex is filling it from its pools…'
+                    ? `Sent. ${VENUE} is filling it from its pools…`
                     : 'Checking the price…',
           })
         },
@@ -240,7 +241,7 @@ export default function Swap() {
         signalSettled(sell.symbol === 'CC' ? 'CCx' : 'USDx')
         setRaw('')
       } else if (r.status === 'pending') {
-        activity.done(id, { detail: 'Sent, not filled yet; this page keeps watching. If Cantex cannot fill it, cancel the pending transfer in your wallet.' })
+        activity.done(id, { detail: NETWORK.oneswap ? 'Sent, not filled yet; this page keeps watching. OneSwap refunds a swap it cannot fill.' : 'Sent, not filled yet; this page keeps watching. If Cantex cannot fill it, cancel the pending transfer in your wallet.' })
       } else {
         activity.done(id, { detail: `${walletName} did not confirm the swap and nothing has left your wallet so far. Check ${walletName} before you swap again.` })
       }
@@ -264,7 +265,7 @@ export default function Swap() {
       <div className="narrative">
         <VaultStage scene="trade" />
         <motion.p className="eyebrow" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          Swap · {NETWORK.label} · Cantex liquidity
+          Swap · {NETWORK.label} · {VENUE} liquidity
         </motion.p>
         <h1 className="display">
           <motion.span className="line" initial={{ y: '110%' }} animate={{ y: 0 }} transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
@@ -276,7 +277,7 @@ export default function Swap() {
         </h1>
         {symbol && <PriceBlock symbol={symbol} poolPrice={poolPrice} reference={reference?.price} offMarket={offMarket} />}
         <p className="whisper">
-          <EyeIcon /> Orvane holds nothing and charges nothing. Your wallet sends the swap straight to Cantex's pools; Orvane prices it itself first and
+          <EyeIcon /> Orvane holds nothing and charges nothing. Your wallet sends the swap straight to {VENUE}'s pools; Orvane prices it itself first and
           checks it again just before your wallet opens.
         </p>
       </div>
@@ -384,7 +385,7 @@ export default function Swap() {
                 <div>
                   <dt>Fees</dt>
                   <dd className="mono">
-                    {fmt(toNumber(dec(quote.feePercentage)) * 100, 2)}% · {quote.networkFee.amount} CC network
+                    {fmt(toNumber(dec(quote.feePercentage)) * 100, 2)}% · {Number(quote.networkFee.amount)} {market.token(quote.networkFee)?.symbol ?? 'CC'} network
                   </dd>
                 </div>
                 <div>
@@ -399,7 +400,7 @@ export default function Swap() {
                 </div>
                 <div>
                   <dt>Usually fills in</dt>
-                  <dd className="mono">~{Math.round(quote.estimatedSeconds)} s</dd>
+                  <dd className="mono">{Number.isFinite(quote.estimatedSeconds) ? `~${Math.round(quote.estimatedSeconds)} s` : '—'}</dd>
                 </div>
               </dl>
             )}
@@ -408,7 +409,7 @@ export default function Swap() {
                 This pool's price is {fmt(offMarket / 100, 0)}% away from the market price of Canton Coin. You would likely trade at a bad price.
               </p>
             )}
-            {belowMin && <p className="tx-warn">Cantex fills swaps of at least {fmt(toNumber(ccMin), 0)} CC.</p>}
+            {belowMin && <p className="tx-warn">{VENUE} fills swaps of at least {fmt(toNumber(ccMin), 0)} CC.</p>}
             {tooThin && (
               <p className="tx-warn">This swap would move the pool's price by {impactText(impact)}: the pool is too thin for this amount. Try a smaller amount.</p>
             )}
@@ -507,7 +508,7 @@ export default function Swap() {
                   <p className="tx-error">{tx.message}</p>
                 ) : (
                   <ol>
-                    {['Price checked twice', 'Signed in your wallet', 'Filled from Cantex pools', 'In your wallet'].map((s, i) => (
+                    {['Price checked twice', 'Signed in your wallet', `Filled from ${VENUE} pools`, 'In your wallet'].map((s, i) => (
                       <li key={s} className={i < reached ? 'done' : i === reached ? 'active' : ''}>
                         <span className="dot" />
                         {s}
@@ -523,7 +524,7 @@ export default function Swap() {
                 )}
                 {tx.phase === 'done' && tx.outcome === 'pending' && (
                   <p className="tx-warn">
-                    Sent, not filled yet; this page keeps watching. If Cantex can't fill it, the transfer stays pending: cancel it in your wallet and your funds come back.
+                    Sent, not filled yet; this page keeps watching.{' '}{NETWORK.oneswap ? 'OneSwap refunds a swap it cannot fill.' : "If Cantex can't fill it, the transfer stays pending: cancel it in your wallet and your funds come back."}
                   </p>
                 )}
                 {tx.phase === 'done' && tx.outcome === 'unconfirmed' && (
@@ -645,6 +646,8 @@ function statusText(r: SwapRecord) {
       return watched ? 'not confirmed by your wallet yet' : 'not confirmed: check your wallet'
     case 'failed':
       return 'not sent'
+    case 'refunded':
+      return 'refunded by OneSwap'
     default:
       return 'sending'
   }

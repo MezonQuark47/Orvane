@@ -5,6 +5,7 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { sameInstrument, type Token } from '../../../shared/cantex.ts'
+import { VENUE } from '../ledger/network.ts'
 import { TokenIcon, fmt, fmtCompact } from '../ui/bits.tsx'
 
 interface Props {
@@ -15,7 +16,7 @@ interface Props {
   side: 'pay' | 'receive'
   /** free balance, when a wallet is connected */
   balance?: (t: Token) => number
-  /** how deep the token's deepest Cantex pool is, in CC */
+  /** how deep the token's deepest pool at the venue is, in CC */
   depth: (t: Token) => number
   onChange: (t: Token) => void
 }
@@ -76,7 +77,7 @@ export function TokenPicker({ tokens, value, other, side, balance, depth, onChan
           }}
         >
           <Dialog.Title>{side === 'pay' ? 'You pay' : 'You receive'}</Dialog.Title>
-          <Dialog.Description className="muted small">Every token Cantex lists, with who issues it.</Dialog.Description>
+          <Dialog.Description className="muted small">Every token {VENUE} lists, with who issues it.</Dialog.Description>
           <input
             ref={input}
             className="picker-search"

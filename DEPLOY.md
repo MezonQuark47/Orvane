@@ -31,6 +31,28 @@ What the headers in `vercel.json` do:
 Moving to Cloudflare Pages later is the same build and output folder; the headers move into a
 `frontend/public/_headers` file in Cloudflare's format.
 
+### The DevNet site (OneSwap)
+
+Cantex has no DevNet, so on DevNet swaps go through [OneSwap](https://docs.oneswap.cc) instead,
+for testing; MainNet and TestNet keep Cantex. OneSwap opens every swap with an integrator key that
+must not reach the browser, so the app calls `/api/oneswap`, a Vercel function (`api/oneswap.ts`)
+that adds the key and passes on only the calls the app makes, to OneSwap's DevNet API only.
+
+1. Create a DevNet integrator key at [devnet.oneswap.cc](https://devnet.oneswap.cc).
+2. In Vercel, a second project from the same repository, with two environment variables:
+   `VITE_ORVANE_NETWORK` = `devnet` and `ONESWAP_API_KEY` = the key. The MainNet project has no key,
+   so its `/api/oneswap` answers that OneSwap is not set up.
+3. A [Loop](https://wallet.devnet.looptech.io) DevNet wallet with DevNet Canton Coin.
+
+Locally: put `ONESWAP_API_KEY=...` in `frontend/.env.local` (ignored by git) and run
+`npm run dev:devnet`; the development server adds the key the same way.
+
+What differs from Cantex: OneSwap answers with a deposit party per swap and the wallet sends the
+input there without a memo; it holds the swap to the user's minimum output, refunds a swap it cannot
+fill, and reports each swap's state, which the app follows. It takes a network fee from the input.
+OneSwap's DevNet has one pool with liquidity (CC/CBTC). The site's `/api/oneswap` is open to
+anyone who reaches it and spends Orvane's key; fine for DevNet, not for MainNet.
+
 ## 2. Orvane's validator and proxy
 
 Swaps work without this; it is what makes Orvane's party a confirmer of every swap (see the README,

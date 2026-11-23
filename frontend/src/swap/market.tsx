@@ -1,13 +1,15 @@
-// Market data from Cantex: what can be swapped, the pools behind it, live
-// prices and candles. Public, keyless, read straight from Cantex's API.
+// Market data from the swap venue: what can be swapped and the pools behind
+// it. Cantex (TestNet, MainNet) also streams live prices and candles, read
+// straight from its public API; OneSwap (DevNet) has pools and quotes only.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { CantexApi, streamMarket, sameInstrument, type Candle, type ExchangePolicy, type Instrument, type PoolState, type Token } from '../../../shared/cantex.ts'
+import { CantexApi, streamMarket, sameInstrument, type Candle, type ExchangePolicy, type Instrument, type PoolState, type SwapVenue, type Token } from '../../../shared/cantex.ts'
+import { OneSwapApi } from '../../../shared/oneswap.ts'
 import { NETWORK } from '../ledger/network.ts'
 
 export interface MarketState {
   status: 'loading' | 'ready' | 'offline' | 'unsupported'
-  api?: CantexApi
+  api?: SwapVenue
   tokens: Token[]
   pools: PoolState[]
   policy?: ExchangePolicy
@@ -29,8 +31,11 @@ const REFRESH_MS = 15_000
 
 export function MarketProvider({ children }: { children: ReactNode }) {
   const cfg = NETWORK.cantex
-  const api = useMemo(() => (cfg ? new CantexApi(cfg.api) : undefined), [cfg])
-  const [status, setStatus] = useState<MarketState['status']>(cfg ? 'loading' : 'unsupported')
+  const api = useMemo<SwapVenue | undefined>(
+    () => (cfg ? new CantexApi(cfg.api) : NETWORK.oneswap ? new OneSwapApi(NETWORK.oneswap.api) : undefined),
+    [cfg],
+  )
+  const [status, setStatus] = useState<MarketState['status']>(api ? 'loading' : 'unsupported')
   const [tokens, setTokens] = useState<Token[]>([])
   const [pools, setPools] = useState<PoolState[]>([])
   const [policy, setPolicy] = useState<ExchangePolicy>()
