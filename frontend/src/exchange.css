@@ -472,3 +472,156 @@ body {
     display: none;
   }
 }
+
+/* ================================================================
+   The swap card, in the Exchange card language: one glass slab, soft
+   inset fields, big grotesk numbers, a blue dot for what you send and an
+   ember dot for what you get, the same two colours as the particles.
+   ================================================================ */
+.panel::before {
+  display: none;
+}
+.panel {
+  border-radius: 22px;
+  box-shadow: 0 40px 80px -40px rgba(0, 0, 0, 0.9);
+}
+.tilt::after {
+  display: none;
+}
+.card-head h2,
+.card-head h3 {
+  font-family: var(--sans);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+.swap-card .card-head {
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.card-title {
+  display: grid;
+  gap: 4px;
+}
+.card-live {
+  font: 11px var(--mono);
+  color: var(--verdigris);
+}
+.slippage {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--line);
+}
+.slip-label {
+  font: 10.5px var(--mono);
+  color: var(--faint);
+  padding: 0 6px 0 8px;
+}
+.slippage button.on {
+  background: var(--text);
+  color: var(--ink-0);
+}
+.leg,
+.leg-in,
+.leg-out {
+  padding: 14px 16px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.leg:focus-within {
+  border-color: var(--line-2);
+}
+.leg-top {
+  font: 11px var(--mono);
+  align-items: center;
+}
+.leg-top .link {
+  font: 11px var(--mono);
+  color: var(--muted);
+}
+.leg-top .link:hover {
+  color: var(--text);
+}
+.leg-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.leg-label i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.dot-in {
+  background: var(--cc);
+  box-shadow: 0 0 10px var(--cc);
+}
+.dot-out {
+  background: var(--usd);
+  box-shadow: 0 0 10px var(--usd);
+}
+.amount {
+  font-family: var(--sans);
+  font-size: 40px;
+  font-weight: 400;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+.amount.out {
+  color: var(--text);
+}
+.leg-foot {
+  font-size: 11px;
+}
+.token-chip {
+  background: rgba(255, 255, 255, 0.07);
+  border: 0;
+  font-weight: 600;
+}
+.token-chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.flip-wrap {
+  height: 8px;
+}
+.flip {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--ink-1);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  box-shadow: 0 0 0 4px var(--ink-0);
+}
+.flip:hover {
+  border-color: var(--text);
+}
+.terms p,
+.details {
+  font-family: var(--mono);
+}
+.terms {
+  margin: 14px 2px 0;
+}
+.details {
+  font-size: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.swap-card .primary {
+  padding: 18px;
+  font-size: 15px;
+}
+.glyph-cc {
+  color: #dce7ff;
+  background: radial-gradient(circle at 35% 30%, rgba(127, 168, 255, 0.6), rgba(127, 168, 255, 0.18));
+}
+.glyph-usd {
+  color: #ffe1d2;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 122, 61, 0.6), rgba(255, 122, 61, 0.18));
+}
+.timeline li.done .dot {
+  background: var(--verdigris);
+}

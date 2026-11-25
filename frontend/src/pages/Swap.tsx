@@ -21,7 +21,7 @@ import { TokenPicker } from '../swap/picker.tsx'
 import { VaultStage } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
 import { useActivity } from '../ui/activity.tsx'
-import { ConnectFirst, EyeIcon, Panel, Rolling, Sparkline, Tilt, fmt, fmtCompact } from '../ui/bits.tsx'
+import { ConnectFirst, EyeIcon, Panel, Rolling, Sparkline, fmt, fmtCompact } from '../ui/bits.tsx'
 import { errorText } from '../ui/errors.ts'
 import { clockTime, dateTime } from '../ui/time.ts'
 
@@ -291,17 +291,21 @@ export default function Swap() {
         </h1>
         {symbol && <PriceBlock symbol={symbol} poolPrice={poolPrice} reference={reference?.price} offMarket={offMarket} />}
         <p className="whisper">
-          <EyeIcon /> Orvane holds nothing and charges nothing. Your wallet sends the swap straight to {VENUE}'s pools; Orvane prices it itself first and
-          checks it again just before your wallet opens.
+          <EyeIcon /> No account and no Orvane fee. Your wallet sends the swap straight to {VENUE}'s pools, after Orvane has checked the price against the
+          pools, and checked it again the moment you press Swap.
         </p>
       </div>
 
       <div className="rail">
         <Panel delay={0.15}>
-          <Tilt className="swap-card">
+          <div className="swap-card">
             <header className="card-head">
-              <h2>Swap</h2>
-              <div className="slippage" role="radiogroup" aria-label="Price limit">
+              <div className="card-title">
+                <h2>Swap</h2>
+                <span className="card-live">● live quote · {NETWORK.label}</span>
+              </div>
+              <div className="slippage" role="radiogroup" aria-label="Price limit" title="How far the price may move before nothing is sent">
+                <span className="slip-label" aria-hidden>limit</span>
                 {SLIPPAGES.map((s) => (
                   <button key={s} role="radio" aria-checked={slippage === s} className={slippage === s ? 'on' : ''} onClick={() => setSlippage(s)}>
                     {s / 100}%
@@ -312,7 +316,9 @@ export default function Swap() {
 
             <div className="leg leg-in">
               <div className="leg-top">
-                <span>You pay</span>
+                <span className="leg-label">
+                  <i className="dot-in" /> You send
+                </span>
                 {party && sell && (
                   <button className="link" onClick={() => setRaw(String(Math.floor(toNumber(balanceIn) * 10_000) / 10_000))}>
                     Balance {fmt(toNumber(balanceIn), 4)} · Max
@@ -321,7 +327,7 @@ export default function Swap() {
               </div>
               <div className="leg-main">
                 <input
-                  className="amount mono"
+                  className="amount"
                   inputMode="decimal"
                   placeholder="0.00"
                   value={raw}
@@ -329,7 +335,7 @@ export default function Swap() {
                     if (AMOUNT.test(e.target.value)) setRaw(e.target.value)
                     if (tx.phase === 'done' || tx.phase === 'error') setTx({ phase: 'idle' })
                   }}
-                  aria-label="Amount to pay"
+                  aria-label="Amount to send"
                 />
                 <TokenPicker
                   side="pay"
@@ -364,11 +370,13 @@ export default function Swap() {
             </div>
             <div className="leg leg-out">
               <div className="leg-top">
-                <span>You receive</span>
+                <span className="leg-label">
+                  <i className="dot-out" /> You receive
+                </span>
                 {quote && <Freshness age={age} />}
               </div>
               <div className="leg-main">
-                <Rolling value={quote ? toNumber(dec(quote.returned.amount)) : 0} digits={6} className="amount mono out" />
+                <Rolling value={quote ? toNumber(dec(quote.returned.amount)) : 0} digits={6} className="amount out" />
                 <TokenPicker
                   side="receive"
                   tokens={tokens}
@@ -574,7 +582,7 @@ export default function Swap() {
                 )}
               </motion.div>
             )}
-          </Tilt>
+          </div>
         </Panel>
 
         {party && <History rows={swaps} pendingOut={mine.outgoing.filter((o) => o.receiver === NETWORK.cantex?.swapParty).length} />}

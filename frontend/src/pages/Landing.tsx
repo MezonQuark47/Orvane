@@ -17,7 +17,7 @@ type Go = (tab: 'swap' | 'liquidity') => void
 const ease = [0.16, 1, 0.3, 1] as const
 const REPO = 'https://github.com/mezonquark47/orvane'
 const SECTIONS = ['ex-hero', 'ex-pool', 'ex-checks', 'ex-swap'] as const
-const RAIL = ['01 two tokens', '02 one pool', '03 two checks', '04 your swap']
+const RAIL = ['01 your wallet', '02 the pool', '03 the checks', '04 your swap']
 
 export default function Landing({ go }: { go: Go }) {
   const stage = useLandingStage()
@@ -116,20 +116,20 @@ const Rise = ({ children, className }: { children: ReactNode; className?: string
 function Hero({ go }: { go: Go }) {
   return (
     <section id="ex-hero">
-      <p className="ex-eyebrow">{VENUE ? `${NETWORK.label} · token swap` : `${NETWORK.label} · exchange`}</p>
-      <Split as="h1" className="ex-h1" text="Move value without letting go of it." />
+      <p className="ex-eyebrow">Token swaps on {NETWORK.label}</p>
+      <Split as="h1" className="ex-h1" text="Swap Canton tokens," light="straight from your wallet." />
       <Rise>
         <p className="ex-lede">
           {VENUE
-            ? `Swap any token ${VENUE} lists, straight from your own wallet into its pools. Orvane holds nothing and charges nothing. Move your cursor through the particles.`
-            : 'Swap Canton Coin in one atomic transaction, and provide liquidity without handing it to anyone. Move your cursor through the particles.'}
+            ? `Orvane gets the price from ${VENUE}'s pools, checks it twice, and hands your wallet one transfer to sign. No sign-up, no Orvane fee, and nobody holds your tokens in between.`
+            : 'Swap Canton Coin in one atomic transaction, or earn fees by providing liquidity that never leaves your own account. No sign-up and no Orvane fee.'}
         </p>
         <div className="ex-cta">
           <button className="ex-btn" onClick={() => go('swap')}>
             Start a swap
           </button>
           <button className="ex-ghost" onClick={() => scrollToTarget(document.getElementById('ex-pool')!)}>
-            scroll to see how ↓
+            How it works ↓
           </button>
         </div>
       </Rise>
@@ -146,14 +146,14 @@ function Pool() {
   const pool = config?.pools[0]
   return (
     <section id="ex-pool" className="ex-right">
-      <p className="ex-eyebrow">02 · the route</p>
-      <Split className="ex-h2" text="It flows through the pool," light="not through us." />
+      <p className="ex-eyebrow">02 · How it works</p>
+      <Split className="ex-h2" text="Your wallet deals with the pool," light="not with us." />
       <Rise>
         <p className="ex-lede">
           {VENUE ? (
             <>
-              Your <span className="ex-cc">tokens</span> go from your wallet into {VENUE}'s pool and the <span className="ex-usd">output</span> comes straight back.
-              Orvane only builds the transfer and shows you the math.
+              <span className="ex-cc">What you sell</span> goes from your wallet to {VENUE}'s pool, and <span className="ex-usd">what you buy</span> comes back to the same
+              wallet. Orvane never takes custody: it prepares the transfer, shows you the numbers, and steps aside.
             </>
           ) : (
             'Your trade settles against every provider at once, in one transaction. Liquidity stays in its owner’s account and comes back on its own at the end of its term.'
@@ -172,7 +172,7 @@ function Pool() {
               </div>
               <div>
                 <b>{depth ? fmtCompact(depth) : '—'}</b>
-                <span>CC in its pools</span>
+                <span>CC of liquidity</span>
               </div>
             </>
           ) : (
@@ -192,40 +192,44 @@ function Pool() {
 function Checks() {
   return (
     <section id="ex-checks">
-      <p className="ex-eyebrow">03 · the checks</p>
-      <Split className="ex-h2" text="Checked by the math," light="then checked again." />
+      <p className="ex-eyebrow">03 · Before you sign</p>
+      <Split className="ex-h2" text="Every price checked," light="then checked again." />
       <Rise>
         <div className="ex-pair">
           <div>
             <div className="n">check 01</div>
-            <h3>Priced from the reserves</h3>
+            <h3>Recomputed from the pools</h3>
             <p>
-              Orvane works out the output from the pools' own reserves and holds it against {VENUE ? `${VENUE}'s` : 'the pool’s'} quote. If they disagree, you see it before
-              anything is signed.
+              Orvane works out what you should get from the pools' public reserves and compares it with {VENUE ? `${VENUE}'s` : 'the pool’s'} quote. If the two
+              don't match, the swap stays locked.
             </p>
           </div>
           <div>
             <div className="n">check 02</div>
-            <h3>Re-quoted before you sign</h3>
-            <p>Right before your wallet opens, the quote is taken again. If it moved past your limit, nothing is sent.</p>
+            <h3>Re-quoted at the last moment</h3>
+            <p>When you press Swap, Orvane asks for a fresh price. If it has moved past the limit you set, nothing is sent and nothing is spent.</p>
           </div>
         </div>
         <ul className="ex-list">
           <li>
-            <span>Price impact</span>
-            <span>your OK above 5%</span>
+            <span>Price impact above 5%</span>
+            <span>needs your OK</span>
           </li>
           <li>
-            <span>Pool price vs. market price</span>
-            <span>flagged if far off</span>
+            <span>Price impact above 30%</span>
+            <span>refused</span>
           </li>
           <li>
-            <span>Can your wallet receive it</span>
-            <span>checked</span>
+            <span>Pool far from the market price</span>
+            <span>flagged</span>
+          </li>
+          <li>
+            <span>Your wallet can receive the token</span>
+            <span>checked first</span>
           </li>
           <li>
             <span>Who signs</span>
-            <span>only your wallet</span>
+            <span>only you, in your wallet</span>
           </li>
         </ul>
       </Rise>
@@ -259,7 +263,7 @@ function RouteCard({ go }: { go: Go }) {
         </div>
       </div>
       <div className="ex-field">
-        <div className="l">You receive, at the pool price now</div>
+        <div className="l">You get, at today's pool price</div>
         <div className="m">
           {price === undefined ? '—' : price.toLocaleString('en-US', { maximumSignificantDigits: 6 })}
           <span className="ex-tok">
@@ -278,12 +282,12 @@ function RouteCard({ go }: { go: Go }) {
           <span>0</span>
         </div>
         <div>
-          <span>Orvane check</span>
-          <b>before every signature</b>
+          <span>Price check</span>
+          <b>twice, before you sign</b>
         </div>
       </div>
       <button className="ex-btn" onClick={() => go('swap')}>
-        Open the swap
+        Get a live quote
       </button>
     </div>
   )
@@ -294,11 +298,11 @@ function SwapSection({ go }: { go: Go }) {
     <section id="ex-swap" className="ex-swap">
       <Rise>{VENUE ? <RouteCard go={go} /> : <PoolCard go={go} />}</Rise>
       <div className="ex-side">
-        <Split className="ex-h2" text="Press swap." light="Watch it turn." />
+        <Split className="ex-h2" text="One transfer." light="One signature." />
         <p>
-          every particle is a unit you send ·{' '}
+          when your swap lands, the particles turn into what you bought ·{' '}
           <a className="ex-ghost" href={REPO} target="_blank" rel="noreferrer">
-            read the code ↗
+            open source ↗
           </a>
         </p>
       </div>

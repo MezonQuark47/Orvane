@@ -90,12 +90,14 @@ function buildGeometry(n: number) {
   return geo
 }
 
-// the landing's horizontal placement per stage: away from the text column
+// the landing's horizontal placement per stage, on the side opposite the
+// text: hero text left, pool text right, checks text left, swap card left
+const LANDING_X = [2.4, -2.6, 3.2, 0.4]
 function landingX(s: number) {
-  if (s < 0.5) return 2.4
-  if (s < 1.5) return -2.6 * (s - 0.5) + 2.4 * (1.5 - s)
-  if (s < 2.5) return 1.6 * (s - 1.5) - 2.6 * (2.5 - s)
-  return 1.6 * (3 - s) + 0.4 * (s - 2.5)
+  const i = Math.max(0, Math.min(2, Math.floor(s)))
+  const f = Math.max(0, Math.min(1, s - i))
+  const e = f * f * (3 - 2 * f)
+  return LANDING_X[i] + (LANDING_X[i + 1] - LANDING_X[i]) * e
 }
 
 export default function Particles({ scene, pulse }: { scene: ParticleScene; pulse?: { id: number } | null }) {
