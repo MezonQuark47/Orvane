@@ -1,7 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { LayoutGroup, motion } from 'motion/react'
 import { Suspense, lazy, useEffect, useId, useMemo, useState } from 'react'
-import { toNumber } from '../../shared/decimal.ts'
 import { DexProvider, useDex } from './ledger/dex.tsx'
 import { GATEWAY_URL } from './ledger/gateway.ts'
 import type { ExtensionWallet, WalletKind } from './ledger/wallet.ts'
@@ -14,14 +13,16 @@ import Swap from './pages/Swap.tsx'
 import { NETWORK, VENUE } from './ledger/network.ts'
 import { MarketProvider, useMarket } from './swap/market.tsx'
 
-const Vault = lazy(() => import('./three/Vault.tsx'))
-import type { VaultScene } from './three/Vault.tsx'
+import { scrollToTarget, startSmoothScroll } from './ui/smooth.ts'
+import type { StageScene } from './three/stage.tsx'
+
+const Particles = lazy(() => import('./three/Particles.tsx'))
 // the Orvane pool's pages run on LocalNet only; other networks never load them
 const Liquidity = lazy(() => import('./pages/Liquidity.tsx'))
 const PoolSwap = lazy(() => import('./pages/PoolSwap.tsx'))
 
-// Phones get a still picture of the vault instead of the live 3D scene, so
-// they never download three.js or spend battery on it.
+// Phones get a still backdrop instead of the live particles, so they never
+// download three.js or spend battery on it.
 const STILL = window.matchMedia('(max-width: 640px), (pointer: coarse) and (max-height: 500px)').matches
 if (STILL) document.documentElement.classList.add('still-vault')
 
@@ -53,7 +54,7 @@ function readTab(): Tab {
 }
 
 function Shell() {
-  const { status, config, pools, pulse, mine } = useDex()
+  const { status, pulse, mine } = useDex()
   const market = useMarket()
   const [tab, setTab] = useState<Tab>(readTab)
   useEffect(() => {
@@ -61,9 +62,10 @@ function Shell() {
     window.addEventListener('hashchange', on)
     return () => window.removeEventListener('hashchange', on)
   }, [])
-  // every section starts at its top, with the vault in its stage
+  useEffect(() => startSmoothScroll(), [])
+  // every section starts at its top
   useEffect(() => {
-    window.scrollTo({ top: 0 })
+    scrollToTarget(0, true)
   }, [tab])
   // the top bar picks up a glass backdrop once the page moves under it
   const [scrolled, setScrolled] = useState(false)
@@ -79,16 +81,8 @@ function Shell() {
     setTab(t)
   }
 
-  // Orb weights: each side of the pool against its first recorded fill.
-  const live = config ? pools.get(config.pools[0]?.poolId ?? '') : undefined
-  const weights = useMemo(() => {
-    const first = live?.recent[0]
-    if (!live || !first || live.reserveA === 0n) return { a: 1, b: 1 }
-    const price = toNumber(live.reserveB) / toNumber(live.reserveA)
-    return { a: Math.min(1.4, Math.max(0.6, first.price / price)), b: Math.min(1.4, Math.max(0.6, price / first.price)) }
-  }, [live])
-
-  const scene: VaultScene = tab === 'home' ? 'hero' : (TABS.find((t) => t.key === tab)?.scene ?? 'trade')
+  const pulseKey = useMemo(() => (pulse ? { id: pulse } : null), [pulse])
+  const scene: StageScene = tab === 'home' ? 'hero' : (TABS.find((t) => t.key === tab)?.scene ?? 'trade')
   const incoming = mine.incoming.length
 
   return (
@@ -97,7 +91,7 @@ function Shell() {
         <div className="still-backdrop" aria-hidden />
       ) : (
         <Suspense fallback={null}>
-          <Vault weightA={weights.a} weightB={weights.b} pulse={pulse ? { id: pulse, from: 'CCx' } : null} scene={scene} />
+          <Particles scene={scene} pulse={pulseKey} />
         </Suspense>
       )}
       <div className="vignette" aria-hidden />
@@ -353,7 +347,7 @@ function Offline() {
   return (
     <main className="offline">
       <motion.div className="panel" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-        <h2>The vault is closed.</h2>
+        <h2>Orvane is offline.</h2>
         <p className="muted">Start LocalNet and the Orvane operator, then this page connects by itself.</p>
         <pre className="mono small">{`./scripts/localnet.ps1 up\nnode operator/index.ts`}</pre>
       </motion.div>

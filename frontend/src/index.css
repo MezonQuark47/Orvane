@@ -4,8 +4,8 @@
   --ink-2: #14171e;
   --panel: rgba(14, 16, 22, 0.58);
   --panel-solid: #101218;
-  --line: rgba(236, 229, 211, 0.08);
-  --line-2: rgba(236, 229, 211, 0.16);
+  --line: rgba(242, 241, 236, 0.08);
+  --line-2: rgba(242, 241, 236, 0.16);
   --text: #ece5d3;
   --muted: #8d8676;
   --faint: #5b574e;
@@ -17,9 +17,9 @@
   --rose: #e07a5f;
   --amber: #e3b23c;
 
-  --serif: 'Bodoni Moda Variable', 'Didot', 'Times New Roman', serif;
-  --sans: 'Schibsted Grotesk Variable', 'Segoe UI', sans-serif;
-  --mono: 'Fragment Mono', ui-monospace, monospace;
+  --serif: 'Bricolage Grotesque Variable', 'Segoe UI', sans-serif;
+  --sans: 'Bricolage Grotesque Variable', 'Segoe UI', sans-serif;
+  --mono: 'Geist Mono', ui-monospace, monospace;
 
   --radius: 22px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -110,7 +110,7 @@ button:disabled {
   pointer-events: none;
   background:
     radial-gradient(ellipse 80% 60% at 50% 40%, transparent 40%, rgba(4, 5, 7, 0.7) 100%),
-    linear-gradient(90deg, transparent 45%, rgba(7, 8, 11, 0.55) 72%);
+    linear-gradient(90deg, transparent 45%, rgba(8, 9, 11, 0.55) 72%);
 }
 
 .app {
@@ -138,7 +138,7 @@ button:disabled {
   text-decoration: none;
   font-family: var(--serif);
   font-size: 28px;
-  font-style: italic;
+  font-style: normal;
   letter-spacing: -0.01em;
 }
 .mark {
@@ -188,8 +188,8 @@ button:disabled {
   position: absolute;
   inset: 0;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(207, 169, 96, 0.22), rgba(207, 169, 96, 0.08));
-  box-shadow: inset 0 0 0 1px rgba(207, 169, 96, 0.35);
+  background: linear-gradient(180deg, rgba(242, 241, 236, 0.22), rgba(242, 241, 236, 0.08));
+  box-shadow: inset 0 0 0 1px rgba(242, 241, 236, 0.35);
 }
 .tab-label {
   position: relative;
@@ -216,7 +216,7 @@ button:disabled {
   border-radius: 50%;
   font-family: var(--serif);
   font-size: 18px;
-  font-style: italic;
+  font-style: normal;
   color: var(--ink-0);
   transition: transform 0.3s var(--ease), box-shadow 0.3s, opacity 0.3s;
   opacity: 0.5;
@@ -334,7 +334,7 @@ main > div {
   padding-bottom: 0.06em;
 }
 .display em {
-  font-style: italic;
+  font-style: normal;
   background: linear-gradient(100deg, var(--brass-hi) 10%, var(--brass) 45%, var(--verdigris) 110%);
   -webkit-background-clip: text;
   background-clip: text;
@@ -378,7 +378,7 @@ main > div {
   padding: 3px 8px;
   border-radius: 999px;
 }
-.delta.up { color: var(--verdigris); background: rgba(99, 181, 158, 0.1); }
+.delta.up { color: var(--verdigris); background: rgba(124, 227, 155, 0.1); }
 .delta.down { color: var(--rose); background: rgba(224, 122, 95, 0.1); }
 
 .spark {
@@ -427,7 +427,7 @@ main > div {
   gap: 8px;
   margin: 6px 0 0;
   font-family: var(--serif);
-  font-style: italic;
+  font-style: normal;
   font-size: 19px;
   color: var(--muted);
 }
@@ -461,7 +461,7 @@ main > div {
   inset: -1px;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(150deg, rgba(241, 215, 155, 0.35), transparent 30%, transparent 70%, rgba(99, 181, 158, 0.25));
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.35), transparent 30%, transparent 70%, rgba(124, 227, 155, 0.25));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
@@ -477,7 +477,7 @@ main > div {
   inset: -22px;
   border-radius: var(--radius);
   pointer-events: none;
-  background: radial-gradient(420px circle at var(--gx, 50%) var(--gy, 0%), rgba(241, 215, 155, 0.07), transparent 45%);
+  background: radial-gradient(420px circle at var(--gx, 50%) var(--gy, 0%), rgba(255, 255, 255, 0.07), transparent 45%);
 }
 
 .card-head {
@@ -531,14 +531,14 @@ main > div {
   transition: border-color 0.3s;
 }
 .leg-in {
-  border-left: 2px solid rgba(207, 169, 96, 0.6);
+  border-left: 2px solid rgba(242, 241, 236, 0.6);
 }
 .leg:focus-within {
-  border-color: rgba(207, 169, 96, 0.45);
+  border-color: rgba(242, 241, 236, 0.45);
 }
 .leg-out {
-  background: rgba(99, 181, 158, 0.04);
-  border-right: 2px solid rgba(99, 181, 158, 0.6);
+  background: rgba(124, 227, 155, 0.04);
+  border-right: 2px solid rgba(124, 227, 155, 0.6);
 }
 .leg-foot {
   margin-top: 6px;
@@ -619,7 +619,7 @@ main > div {
   gap: 8px;
   padding: 6px 12px 6px 6px;
   border-radius: 999px;
-  background: rgba(236, 229, 211, 0.05);
+  background: rgba(242, 241, 236, 0.05);
   border: 1px solid var(--line);
   font-weight: 500;
   white-space: nowrap;
@@ -632,11 +632,11 @@ main > div {
 }
 .glyph-usd {
   color: var(--brass-hi);
-  background: radial-gradient(circle at 35% 30%, rgba(241, 215, 155, 0.35), rgba(138, 106, 46, 0.25));
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.35), rgba(141, 139, 133, 0.25));
 }
 .glyph-cc {
   color: #a6e3d2;
-  background: radial-gradient(circle at 35% 30%, rgba(99, 181, 158, 0.35), rgba(47, 107, 92, 0.25));
+  background: radial-gradient(circle at 35% 30%, rgba(124, 227, 155, 0.35), rgba(47, 107, 92, 0.25));
 }
 
 .flip-wrap {
@@ -659,7 +659,7 @@ main > div {
 }
 .flip:hover {
   color: var(--brass-hi);
-  border-color: rgba(207, 169, 96, 0.5);
+  border-color: rgba(242, 241, 236, 0.5);
 }
 .plus {
   text-align: center;
@@ -711,7 +711,7 @@ main > div {
 }
 .who.you {
   color: var(--verdigris);
-  border-color: rgba(99, 181, 158, 0.4);
+  border-color: rgba(124, 227, 155, 0.4);
 }
 .who.hidden {
   color: var(--faint);
@@ -727,12 +727,12 @@ main > div {
   font-weight: 600;
   font-size: 15px;
   letter-spacing: 0.01em;
-  color: #1d1505;
+  color: #08090b;
   background: linear-gradient(180deg, var(--brass-hi), var(--brass) 55%, var(--brass-lo));
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.5) inset,
     0 -2px 0 rgba(0, 0, 0, 0.2) inset,
-    0 14px 34px -14px rgba(207, 169, 96, 0.7);
+    0 14px 34px -14px rgba(242, 241, 236, 0.7);
   transition: transform 0.25s var(--ease), filter 0.25s, opacity 0.25s;
 }
 .primary span {
@@ -781,7 +781,7 @@ main > div {
 }
 .ghost:hover:not(:disabled) {
   border-color: var(--brass);
-  background: rgba(207, 169, 96, 0.08);
+  background: rgba(242, 241, 236, 0.08);
 }
 .ghost:disabled {
   opacity: 0.5;
@@ -992,7 +992,7 @@ p.tx-ok.mono {
   padding: 4px 9px;
   border-radius: 999px;
   color: var(--verdigris);
-  border: 1px solid rgba(99, 181, 158, 0.35);
+  border: 1px solid rgba(124, 227, 155, 0.35);
 }
 .loop-card p {
   line-height: 1.55;
@@ -1045,15 +1045,15 @@ p.tx-ok.mono {
 }
 .live.ready {
   background: var(--verdigris);
-  box-shadow: 0 0 0 0 rgba(99, 181, 158, 0.6);
+  box-shadow: 0 0 0 0 rgba(124, 227, 155, 0.6);
   animation: ping 2s infinite;
 }
 .live.offline {
   background: var(--rose);
 }
 @keyframes ping {
-  70% { box-shadow: 0 0 0 8px rgba(99, 181, 158, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(99, 181, 158, 0); }
+  70% { box-shadow: 0 0 0 8px rgba(124, 227, 155, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(124, 227, 155, 0); }
 }
 
 /* ---------- responsive ---------- */
@@ -1120,19 +1120,19 @@ p.tx-ok.mono {
   z-index: 50;
   transform-origin: left center;
   background: linear-gradient(90deg, transparent, var(--brass-hi) 40%, var(--verdigris) 80%, transparent);
-  box-shadow: 0 0 12px 1px rgba(241, 215, 155, 0.45);
+  box-shadow: 0 0 12px 1px rgba(255, 255, 255, 0.45);
   pointer-events: none;
 }
 /* the 3D scene now carries the vignette; keep only the reading shade on the right */
 .vignette {
-  background: linear-gradient(90deg, transparent 50%, rgba(7, 8, 11, 0.45) 78%);
+  background: linear-gradient(90deg, transparent 50%, rgba(8, 9, 11, 0.45) 78%);
 }
 /* panels: solid enough to read, quiet enough to let the scene breathe */
 .panel {
   transition: transform var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
 }
 .panel:hover {
-  border-color: rgba(236, 229, 211, 0.14);
+  border-color: rgba(242, 241, 236, 0.14);
 }
 /* primary buttons press in */
 .primary:not(:disabled):active,
@@ -1141,7 +1141,7 @@ p.tx-ok.mono {
   transition-duration: var(--dur-fast);
 }
 
-/* ---------- type: Bodoni Moda for display, engraved-banknote contrast ---------- */
+/* ---------- type: display headings ---------- */
 .display {
   font-optical-sizing: auto;
   font-size: clamp(42px, 4.9vw, 80px);
@@ -1157,7 +1157,7 @@ p.tx-ok.mono {
   text-shadow: none;
 }
 .display {
-  text-shadow: 0 2px 28px rgba(7, 8, 11, 0.55);
+  text-shadow: 0 2px 28px rgba(8, 9, 11, 0.55);
 }
 
 /* ---------- the vault as a backdrop ----------
@@ -1200,7 +1200,7 @@ p.tx-ok.mono {
   left: calc(-1 * clamp(16px, 4vw, 56px));
   width: 62%;
   height: 100%;
-  background: radial-gradient(ellipse 70% 60% at 30% 52%, rgba(7, 8, 11, 0.62), rgba(7, 8, 11, 0) 70%);
+  background: radial-gradient(ellipse 70% 60% at 30% 52%, rgba(8, 9, 11, 0.62), rgba(8, 9, 11, 0) 70%);
   pointer-events: none;
 }
 @media (max-width: 860px) {
@@ -1276,8 +1276,8 @@ p.tx-ok.mono {
   z-index: 0;
   overflow: hidden;
   background:
-    radial-gradient(ellipse 80% 45% at 24% 16%, rgba(207, 169, 96, 0.12), transparent 70%),
-    radial-gradient(ellipse 70% 40% at 80% 82%, rgba(99, 181, 158, 0.09), transparent 70%),
+    radial-gradient(ellipse 80% 45% at 24% 16%, rgba(242, 241, 236, 0.12), transparent 70%),
+    radial-gradient(ellipse 70% 40% at 80% 82%, rgba(124, 227, 155, 0.09), transparent 70%),
     var(--ink-0);
 }
 .still-backdrop::after {
@@ -1288,8 +1288,8 @@ p.tx-ok.mono {
   bottom: 0;
   height: 55%;
   background-image:
-    linear-gradient(rgba(207, 169, 96, 0.2) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(207, 169, 96, 0.2) 1px, transparent 1px);
+    linear-gradient(rgba(242, 241, 236, 0.2) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(242, 241, 236, 0.2) 1px, transparent 1px);
   background-size: 46px 46px;
   transform: perspective(340px) rotateX(64deg);
   transform-origin: 50% 100%;
@@ -1298,7 +1298,7 @@ p.tx-ok.mono {
 }
 /* the picture fades out at its own edges, so it sits on any background */
 .still-vault .vault-stage {
-  background: url('/vault-still.webp') center / contain no-repeat;
+  background: none;
 }
 /* on the landing the vault shows at the top and at the end, not in every chapter */
 .still-vault .ln-chapter .ln-stage-col {
@@ -1317,7 +1317,7 @@ p.tx-ok.mono {
   position: absolute;
   inset: 0 calc(-1 * clamp(16px, 4vw, 56px));
   z-index: -1;
-  background: linear-gradient(to bottom, rgba(7, 8, 11, 0.86), rgba(7, 8, 11, 0.62));
+  background: linear-gradient(to bottom, rgba(8, 9, 11, 0.86), rgba(8, 9, 11, 0.62));
   backdrop-filter: blur(16px) saturate(1.2);
   -webkit-backdrop-filter: blur(16px) saturate(1.2);
   border-bottom: 1px solid var(--line);

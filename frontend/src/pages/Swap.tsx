@@ -472,7 +472,7 @@ export default function Swap() {
             )}
             {party && !canReceive && buy && (
               <div className="tx-warn">
-                Your wallet can't receive {buy.symbol} in one step yet. Cantex needs that to send the swap back to you.
+                Your wallet can't receive {buy.symbol} in one step yet. {VENUE ?? 'The venue'} needs that to send the swap back to you.
                 {wallet.phase === 'connected' && wallet.session.walletUrl ? (
                   <>
                     {' '}Turn on receiving for {buy.symbol} (a transfer pre-approval) in {wallet.session.name}; this page picks it up by itself.

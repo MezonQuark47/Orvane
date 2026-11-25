@@ -343,7 +343,7 @@ function PendingSwapsPanel() {
           )
         })}
       </ul>
-      <p className="muted small">Cantex hasn't filled these swaps. Withdraw the pending transfer in your wallet to get the funds back, or wait for it to expire.</p>
+      <p className="muted small">{VENUE ?? 'The venue'} hasn't filled these swaps. Withdraw the pending transfer in your wallet to get the funds back, or wait for it to expire.</p>
     </Panel>
   )
 }
