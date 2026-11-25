@@ -73,7 +73,7 @@ export default function Portfolio() {
               <em>in one place.</em>
             </span>
           </h1>
-          <p className="lede">Connect a wallet to see what it holds at live pool prices, with your pending swaps and incoming transfers.</p>
+          <p className="lede">Connect your wallet to see what it holds, valued at live pool prices, along with swaps still on their way and transfers waiting for you.</p>
         </div>
         <div className="rail">
           <Panel delay={0.15}>
@@ -111,7 +111,7 @@ export default function Portfolio() {
               <div>
                 <Rolling value={t.free} digits={4} className="mono strong" />
                 <span className="muted small">
-                  {t.key} free{t.locked > 0 ? ` · ${fmt(t.locked, 4)} locked` : ''}
+                  {t.label} available{t.locked > 0 ? ` · ${fmt(t.locked, 4)} locked` : ''}
                 </span>
               </div>
             </motion.div>
@@ -137,8 +137,8 @@ export default function Portfolio() {
 
         <Panel delay={0.35}>
           <header className="card-head">
-            <h3>Holding contracts</h3>
-            <span className="muted small">{mine.holdings.length}</span>
+            <h3>Your holdings</h3>
+            <span className="muted small">{mine.holdings.length} {mine.holdings.length === 1 ? 'contract' : 'contracts'} on the ledger</span>
           </header>
           <ul className="holding-list">
             {mine.holdings.map((h) => {
@@ -148,11 +148,11 @@ export default function Portfolio() {
                   <TokenIcon symbol={label} size={20} />
                   <span className="mono strong">{fmt(toNumber(h.amount), 4)}</span>
                   <span className="muted">{label}</span>
-                  <span className="obs small">{h.locked ? 'locked in an allocation' : 'free'}</span>
+                  <span className="obs small">{h.locked ? 'locked' : 'available'}</span>
                 </li>
               )
             })}
-            {mine.holdings.length === 0 && (loaded ? <li className="empty">No holdings yet.</li> : <li className="empty"><SkeletonList rows={2} /></li>)}
+            {mine.holdings.length === 0 && (loaded ? <li className="empty">Nothing in this wallet yet. Tokens you receive or swap into show up here.</li> : <li className="empty"><SkeletonList rows={2} /></li>)}
           </ul>
           {config?.network === 'localnet' && mine.holdings.length === 0 && loaded && (
             <p className="muted small">
@@ -187,7 +187,7 @@ function IncomingPanel({ items }: { items: Incoming[] }) {
   return (
     <Panel delay={0.15} className="incoming">
       <header className="card-head">
-        <h3>Incoming</h3>
+        <h3>Waiting for you</h3>
         <span className="badge">{items.length} to accept</span>
       </header>
       <ul className="holding-list">
@@ -216,7 +216,7 @@ function IncomingPanel({ items }: { items: Incoming[] }) {
           })}
         </AnimatePresence>
       </ul>
-      {!NETWORK.pool && <p className="muted small">Accept or decline these in your wallet.</p>}
+      {!NETWORK.pool && <p className="muted small">Someone sent you these. Accept or decline them in your wallet; until then they are not in your balance.</p>}
     </Panel>
   )
 }
@@ -327,7 +327,7 @@ function PendingSwapsPanel() {
   return (
     <Panel delay={0.12} className="incoming">
       <header className="card-head">
-        <h3>Not filled yet</h3>
+        <h3>Swaps not filled yet</h3>
         <span className="badge">{pending.length}</span>
       </header>
       <ul className="holding-list">

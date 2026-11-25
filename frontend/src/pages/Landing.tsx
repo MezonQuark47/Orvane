@@ -132,8 +132,36 @@ function Hero({ go }: { go: Go }) {
             How it works ↓
           </button>
         </div>
+        <LiveLine />
       </Rise>
     </section>
+  )
+}
+
+// Where Orvane is connected right now, so a visitor sees it is live before
+// reading anything else.
+function LiveLine() {
+  const market = useMarket()
+  const { status } = useDex()
+  const live = VENUE ? market.status === 'ready' : status === 'ready'
+  const depth = market.pools.reduce((s, p) => s + Number(p.tvlCc), 0)
+  return (
+    <p className="ex-live">
+      <span className={`pip ${live ? '' : 'off'}`} aria-hidden />
+      <span>
+        {live ? 'Live on' : 'Connecting to'} <b>{NETWORK.label}</b>
+      </span>
+      {VENUE && live && (
+        <>
+          <span>
+            <b>{market.tokens.length}</b> tokens
+          </span>
+          <span>
+            <b>{fmtCompact(depth)} CC</b> of liquidity on {VENUE}
+          </span>
+        </>
+      )}
+    </p>
   )
 }
 

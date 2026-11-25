@@ -208,7 +208,8 @@ function WalletButton() {
       <div className="wallet">
         <span className={`has-tip ${copied ? 'tip-on' : ''}`}>
           <button className="wallet-party mono" onClick={copy} aria-describedby={tip} aria-label={`Copy your party id ${party}`}>
-            <span className="wallet-dot" aria-hidden /> {shortParty(party)}
+            <span className="wallet-dot" aria-hidden /> <span className="party-long">{shortParty(party)}</span>
+            <span className="party-short">{compactParty(party)}</span>
           </button>
           <span id={tip} role="tooltip" className="tip" aria-live="polite">
             {copied === 'yes'
@@ -218,8 +219,11 @@ function WalletButton() {
                 : `Signed in with ${wallet.session.name}. Click to copy your party id. Orvane never sees your keys.`}
           </span>
         </span>
-        <button className="link small" onClick={() => disconnect()}>
-          Disconnect
+        <button className="link small wallet-off" onClick={() => disconnect()} aria-label="Disconnect your wallet" title="Disconnect">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+            <path d="M8 1.8v5.4M4.6 3.9a5.4 5.4 0 1 0 6.8 0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+          <span className="wallet-off-label">Disconnect</span>
         </button>
       </div>
     )
@@ -231,6 +235,13 @@ function WalletButton() {
       </button>
     </div>
   )
+}
+
+// A party id as a person can tell it apart at a glance: the start of its name
+// and the end of its key, e.g. "88476c…f219".
+function compactParty(party: string) {
+  const [hint, key = ''] = party.split('::')
+  return `${hint.slice(0, 6)}…${key.slice(-4)}`
 }
 
 // The wallets that speak CIP-0103 on this network.
@@ -295,9 +306,10 @@ function ConnectDialog() {
       name: 'Wallet Gateway',
       detail: NETWORK.gateway ? 'The reference CIP-0103 wallet, running next to LocalNet.' : 'Your organisation’s CIP-0103 Wallet Gateway.',
       available: NETWORK.gateway || customGateway,
-      note: NETWORK.gateway || customGateway ? GATEWAY_URL.replace(/\/api.*$/, '') : 'set VITE_WALLET_GATEWAY_URL',
+      note: GATEWAY_URL.replace(/\/api.*$/, ''),
     },
-  ]
+    // a gateway only shows where one is set up; it is an organisation's tool, not something a user installs
+  ].filter((o) => o.kind !== 'gateway' || o.available) as Option[]
   // which option the user picked, to show the wait on it
   const [picked, setPicked] = useState<string>()
   const pick = async (o: Option) => {
@@ -317,7 +329,8 @@ function ConnectDialog() {
         <Dialog.Content className="dialog wallet-dialog">
           <Dialog.Title>Connect a wallet</Dialog.Title>
           <Dialog.Description className="muted">
-            You sign every action in your wallet. Orvane reads only your own contracts, through the wallet, and never holds your keys.
+            Pick the wallet you use on {NETWORK.label}. You approve every swap in the wallet itself; Orvane never sees your keys and can't move anything on its
+            own.
           </Dialog.Description>
           <ul className="wallet-options">
             {options.map((o) => (
@@ -347,9 +360,18 @@ function Offline() {
   return (
     <main className="offline">
       <motion.div className="panel" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-        <h2>Orvane is offline.</h2>
-        <p className="muted">Start LocalNet and the Orvane operator, then this page connects by itself.</p>
-        <pre className="mono small">{`./scripts/localnet.ps1 up\nnode operator/index.ts`}</pre>
+        {VENUE ? (
+          <>
+            <h2>Can't reach {VENUE} right now.</h2>
+            <p className="muted">Prices and pools come from {VENUE}. This page keeps trying and picks up again by itself; check your connection in the meantime.</p>
+          </>
+        ) : (
+          <>
+            <h2>Orvane is offline.</h2>
+            <p className="muted">Start LocalNet and the Orvane operator, then this page connects by itself.</p>
+            <pre className="mono small">{`./scripts/localnet.ps1 up\nnode operator/index.ts`}</pre>
+          </>
+        )}
       </motion.div>
     </main>
   )

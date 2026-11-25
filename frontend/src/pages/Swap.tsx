@@ -658,10 +658,13 @@ function PriceBlock({ symbol, poolPrice, reference, offMarket }: { symbol: strin
           <dt>Pool fee</dt>
           <dd className="mono">{pool ? `${fmt(Number(pool.feeRate) * 100, 2)}%` : '—'}</dd>
         </div>
-        <div>
-          <dt>Market price</dt>
-          <dd className={`mono ${offMarket > 1_000 ? 'warn' : ''}`}>{reference ? `CC ${fmt(reference, 5)} USDC` : '—'}</dd>
-        </div>
+        {/* only where a reference market exists (Cantex); DevNet has none */}
+        {NETWORK.cantex && (
+          <div>
+            <dt>Market price</dt>
+            <dd className={`mono ${offMarket > 1_000 ? 'warn' : ''}`}>{reference ? `CC ${fmt(reference, 5)} USDC` : '—'}</dd>
+          </div>
+        )}
       </dl>
     </motion.div>
   )
@@ -711,7 +714,7 @@ function History({ rows, pendingOut }: { rows: SwapRecord[]; pendingOut: number 
       </header>
       {pendingOut > 0 && <p className="tx-warn small">{pendingOut} swap(s) sent and not filled yet. You can cancel a pending transfer in your wallet.</p>}
       {rows.length === 0 ? (
-        <p className="empty">No swaps yet.</p>
+        <p className="empty">No swaps yet. Each one you make here is listed with how it ended.</p>
       ) : (
         <ul className="receipt-list history">
           <AnimatePresence initial={false}>

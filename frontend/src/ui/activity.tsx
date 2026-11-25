@@ -7,6 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useDex } from '../ledger/dex.tsx'
 import { shortParty } from './bits.tsx'
 import { explain, type Explained } from './errors.ts'
+import { NETWORK } from '../ledger/network.ts'
 
 export type ActivityStatus = 'pending' | 'done' | 'failed'
 
@@ -224,7 +225,6 @@ const ago = (t: number, now: number) => {
 
 export function ActivityDock({ hidden }: { hidden?: boolean }) {
   const { items, open, setOpen, clear } = useFeed()
-  const { config } = useDex()
   const pending = items.filter((a) => a.status === 'pending').length
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -268,7 +268,7 @@ export function ActivityDock({ hidden }: { hidden?: boolean }) {
               <header className="drawer-head">
                 <div>
                   <h2>Activity</h2>
-                  <p className="muted small">What you signed from this browser on {config?.network === 'localnet' ? 'Canton LocalNet' : config?.network ?? 'this network'}.</p>
+                  <p className="muted small">What you signed from this browser on {NETWORK.label}.</p>
                 </div>
                 <button className="toast-x" onClick={() => setOpen(false)} aria-label="Close">
                   <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden>
@@ -281,7 +281,9 @@ export function ActivityDock({ hidden }: { hidden?: boolean }) {
                 <div className="drawer-empty">
                   <span className="mark-status done" aria-hidden />
                   <p>Nothing yet.</p>
-                  <p className="muted small">Swaps, payroll runs, invoices and loans you sign show up here, with what happened to each.</p>
+                  <p className="muted small">
+                    Every {NETWORK.pool ? 'swap and liquidity move' : 'swap'} you sign from this browser shows up here, with what happened to it.
+                  </p>
                 </div>
               ) : (
                 <ol className="feed">

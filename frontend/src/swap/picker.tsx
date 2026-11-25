@@ -76,8 +76,8 @@ export function TokenPicker({ tokens, value, other, side, balance, depth, onChan
             input.current?.focus()
           }}
         >
-          <Dialog.Title>{side === 'pay' ? 'You pay' : 'You receive'}</Dialog.Title>
-          <Dialog.Description className="muted small">Every token {VENUE} lists, with who issues it.</Dialog.Description>
+          <Dialog.Title>{side === 'pay' ? 'You send' : 'You receive'}</Dialog.Title>
+          <Dialog.Description className="muted small">Every token {VENUE} lists. Check the issuer: two tokens can share a symbol.</Dialog.Description>
           <input
             ref={input}
             className="picker-search"

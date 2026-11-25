@@ -625,3 +625,141 @@ body {
 .timeline li.done .dot {
   background: var(--verdigris);
 }
+
+/* ================================================================
+   Polish: wallet chip, small screens, details
+   ================================================================ */
+html {
+  scrollbar-color: #2a2b30 transparent;
+}
+::selection {
+  background: var(--cc);
+  color: var(--ink-0);
+}
+
+/* the wallet chip: the full party on wide screens, "88476c…f219" on narrow ones */
+.party-short {
+  display: none;
+}
+.wallet-off {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.wallet-off:hover {
+  color: var(--text);
+}
+@media (max-width: 760px) {
+  .party-long {
+    display: none;
+  }
+  .party-short {
+    display: inline;
+  }
+  .wallet-off-label {
+    display: none;
+  }
+  .wallet-off {
+    padding: 8px;
+  }
+}
+
+/* a live line under the hero buttons: where Orvane is connected right now */
+.ex-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  margin-top: 40px;
+  font: 12px var(--mono);
+  color: var(--muted);
+}
+.ex-live b {
+  color: var(--text);
+  font-weight: 400;
+}
+.ex-live .pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--verdigris);
+  box-shadow: 0 0 0 0 rgba(124, 227, 155, 0.6);
+  animation: ex-pip 2.4s ease-out infinite;
+}
+.ex-live .pip.off {
+  background: var(--faint);
+  animation: none;
+}
+@keyframes ex-pip {
+  to {
+    box-shadow: 0 0 0 8px rgba(124, 227, 155, 0);
+  }
+}
+
+/* the landing never pushes the page wider than the screen */
+.ex {
+  overflow-x: clip;
+}
+.ex section > * {
+  min-width: 0;
+}
+.ex-h1,
+.ex-h2 {
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 640px) {
+  .ex-h1 {
+    font-size: clamp(40px, 12.4vw, 56px);
+    max-width: none;
+  }
+  .ex-h2,
+  .ex-side .ex-h2 {
+    font-size: clamp(34px, 10.4vw, 48px);
+    max-width: none;
+  }
+  .ex section {
+    min-height: auto;
+    padding: 16vh 0 8vh;
+  }
+  .ex #ex-hero {
+    min-height: 92vh;
+    padding-top: 12vh;
+  }
+  .ex-lede {
+    font-size: 16px;
+  }
+  .ex-stats {
+    gap: 22px;
+  }
+  .ex-stats b {
+    font-size: 40px;
+  }
+  .ex .ex-swap {
+    min-height: auto;
+  }
+  .ex-field .m {
+    font-size: 28px;
+  }
+  .amount {
+    font-size: 30px;
+  }
+}
+
+/* phones show no 3D, so the pages do not keep room for it at the top */
+.still-vault .narrative {
+  padding-top: 4vh;
+}
+.still-vault .page.page-trade {
+  padding-top: 4vh;
+}
+.still-vault .vault-stage {
+  display: none;
+}
+
+/* the empty price chart: a quiet line, not a big empty box */
+.spark-empty {
+  font: 11px var(--mono);
+  color: var(--faint);
+}

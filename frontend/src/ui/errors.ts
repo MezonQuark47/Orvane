@@ -6,6 +6,7 @@
 // network failures are covered too. Anything unknown falls through as-is.
 
 import { LedgerError } from '../../../shared/ledger.ts'
+import { NETWORK } from '../ledger/network.ts'
 
 export interface Explained {
   title: string
@@ -24,7 +25,11 @@ const RULES: Rule[] = [
   [/gateway|3030|walletconnect|session expired|4100|unauthori[sz]ed/i, "Your wallet isn't reachable", 'Check that the wallet is running and you are signed in, then connect again.'],
 
   // reaching the network
-  [/failed to fetch|networkerror|load failed|econnrefused|bad gateway|service unavailable/i, "Can't reach the network", 'Check that LocalNet and the Orvane operator are running, then try again.'],
+  [
+    /failed to fetch|networkerror|load failed|econnrefused|bad gateway|service unavailable/i,
+    "Can't reach the network",
+    NETWORK.pool ? 'Check that LocalNet and the Orvane operator are running, then try again.' : 'Check your connection and try again in a moment. Nothing was sent.',
+  ],
   [/deadline_exceeded|timed? ?out|timeout/i, 'The network took too long to answer', 'It may still settle. Check Activity in a moment before retrying.'],
   [/duplicate_command/i, 'Already submitted', 'The same request is still being processed.'],
   [/contract_not_found|could not be found|inactive_contracts|locked_contracts|contract.*(archived|consumed)/i, 'Something changed while you were signing', 'Another transaction used these funds first. Try again.'],
