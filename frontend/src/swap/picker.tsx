@@ -106,7 +106,9 @@ export function TokenPicker({ tokens, value, other, side, balance, depth, onChan
             }}
           />
           {rows.length === 0 ? (
-            <p className="picker-empty muted">No token matches “{query.trim()}”.</p>
+            <p className="picker-empty muted">
+              {query.trim() ? <>No token matches “{query.trim()}”.</> : <>{VENUE}’s tokens are still loading.</>}
+            </p>
           ) : (
             <ul ref={list} id={`${id}-list`} className="picker-list" role="listbox" aria-label={label}>
               {rows.map((t, i) => {

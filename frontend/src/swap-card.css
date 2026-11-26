@@ -1,0 +1,203 @@
+/* The swap page's panels in the same glass as the wallet menu: see-through
+   graphite with a blur, hairline edges, and the two worlds echoed in the
+   card, a faint blue light where you send and an ember one where you get. */
+
+.page-trade .panel {
+  border-radius: 26px;
+  border: 1px solid var(--line-2);
+  background:
+    radial-gradient(120% 60% at 0% 0%, rgba(127, 168, 255, 0.07), transparent 55%),
+    radial-gradient(120% 60% at 100% 100%, rgba(255, 122, 61, 0.06), transparent 55%),
+    rgba(12, 13, 16, 0.62);
+  backdrop-filter: blur(22px) saturate(1.25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+}
+
+/* ---------------------------------------------------------------- header */
+.swap-card .card-head h2,
+.swap-card .card-head h3 {
+  font-size: 26px;
+}
+.swap-card .slippage {
+  height: 30px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+}
+.swap-card .slippage button {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font: 11px var(--mono);
+  color: var(--muted);
+}
+.swap-card .slippage button:hover {
+  color: var(--text);
+}
+.swap-card .slippage button.on {
+  background: var(--text);
+  color: var(--ink-0);
+}
+
+/* ------------------------------------------------------------------ legs */
+.swap-card .leg {
+  position: relative;
+  overflow: hidden;
+  padding: 16px 16px 12px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.26);
+  transition:
+    border-color 0.3s,
+    background 0.3s,
+    box-shadow 0.3s;
+}
+/* each side carries its token's light along its left edge */
+.swap-card .leg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(70% 90% at 0% 50%, var(--leg-tint), transparent 70%);
+  opacity: 0.55;
+  transition: opacity 0.4s;
+}
+.swap-card .leg-in {
+  --leg-tint: rgba(127, 168, 255, 0.14);
+  --leg-edge: rgba(127, 168, 255, 0.45);
+}
+.swap-card .leg-out {
+  --leg-tint: rgba(255, 122, 61, 0.13);
+  --leg-edge: rgba(255, 122, 61, 0.42);
+}
+.swap-card .leg:hover {
+  border-color: var(--line-2);
+}
+.swap-card .leg:focus-within {
+  border-color: var(--leg-edge);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--leg-edge) 18%, transparent);
+}
+.swap-card .leg:focus-within::before {
+  opacity: 1;
+}
+.swap-card .leg > * {
+  position: relative;
+}
+.swap-card .leg-top {
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.swap-card .amount {
+  font-size: 42px;
+  font-weight: 300;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums;
+  background: none;
+}
+.swap-card .amount::placeholder {
+  color: var(--faint);
+}
+
+/* --------------------------------------------------------- token picker */
+.swap-card .token-chip {
+  height: 36px;
+  padding: 0 12px 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: linear-gradient(180deg, rgba(242, 241, 236, 0.08), rgba(242, 241, 236, 0.02));
+  font-weight: 550;
+}
+.swap-card .token-chip:hover {
+  border-color: rgba(242, 241, 236, 0.34);
+  background: linear-gradient(180deg, rgba(242, 241, 236, 0.12), rgba(242, 241, 236, 0.04));
+}
+
+/* ------------------------------------------------------------------ flip */
+.swap-card .flip {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--line-2);
+  background: rgba(14, 15, 18, 0.9);
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 0 0 5px rgba(12, 13, 16, 0.9),
+    0 8px 24px -8px rgba(0, 0, 0, 0.8);
+}
+.swap-card .flip:hover {
+  border-color: rgba(242, 241, 236, 0.5);
+  background: rgba(24, 25, 30, 0.95);
+}
+
+/* -------------------------------------------------------------- button */
+.swap-card .primary {
+  border-radius: 16px;
+}
+.swap-card .primary:disabled {
+  background: rgba(242, 241, 236, 0.04);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  box-shadow: none;
+  opacity: 1;
+}
+
+/* --------------------------------------------------------- your swaps */
+.page-trade .receipts .card-head h2,
+.page-trade .receipts .card-head h3 {
+  font-size: 20px;
+}
+
+/* ---------------------------------------------------- the token picker */
+.dialog.picker {
+  gap: 14px;
+  padding: 24px;
+  border-radius: 24px;
+  background: rgba(14, 15, 18, 0.94);
+  backdrop-filter: blur(20px) saturate(1.2);
+}
+.dialog.picker h2 {
+  font-family: var(--sans);
+  font-weight: 650;
+  font-size: 26px;
+  letter-spacing: -0.035em;
+}
+.dialog.picker p.muted {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.dialog.picker .picker-search {
+  border-radius: 999px;
+  padding: 12px 18px;
+  border-color: var(--line-2);
+  background: rgba(0, 0, 0, 0.3);
+}
+.dialog.picker .picker-search:focus {
+  border-color: rgba(127, 168, 255, 0.5);
+  box-shadow: 0 0 0 4px rgba(127, 168, 255, 0.1);
+}
+.dialog.picker .picker-row {
+  border: 1px solid transparent;
+  transition:
+    background 0.2s,
+    border-color 0.2s;
+}
+.dialog.picker .picker-row.active {
+  background: rgba(242, 241, 236, 0.05);
+  border-color: var(--line);
+}
+.dialog.picker .picker-empty {
+  padding: 18px 0;
+  text-align: center;
+  font-size: 13px;
+}
+
+/* the leg itself shows focus, so the number field needs no ring of its own */
+.swap-card .amount:focus,
+.swap-card .amount:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-color: transparent;
+}
+.dialog.picker .picker-search:focus-visible {
+  outline: none;
+}
