@@ -432,6 +432,7 @@ main > div {
   color: var(--muted);
 }
 .whisper svg {
+  flex: none;
   color: var(--verdigris);
 }
 
