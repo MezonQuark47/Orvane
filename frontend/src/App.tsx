@@ -13,6 +13,7 @@ import Swap from './pages/Swap.tsx'
 import { NETWORK, VENUE } from './ledger/network.ts'
 import { MarketProvider, useMarket } from './swap/market.tsx'
 
+import { startKinetic } from './ui/kinetic.ts'
 import { scrollToTarget, startSmoothScroll } from './ui/smooth.ts'
 import type { StageScene } from './three/stage.tsx'
 
@@ -30,10 +31,10 @@ if (STILL) document.documentElement.classList.add('still-vault')
 
 const ALL_TABS = [
   { key: 'swap', label: 'Swap', scene: 'trade' },
-  { key: 'markets', label: 'Markets', scene: 'trade' },
+  { key: 'markets', label: 'Markets', scene: 'markets' },
   { key: 'liquidity', label: 'Liquidity', scene: 'liquidity' },
   { key: 'portfolio', label: 'Portfolio', scene: 'holdings' },
-  { key: 'how', label: 'How it works', scene: 'holdings' },
+  { key: 'how', label: 'How it works', scene: 'how' },
 ] as const
 // Liquidity is the Orvane pool, kept for later; it only shows where the pool runs (LocalNet).
 // Markets lists the venue's pools, so it only shows where there is a venue.
@@ -68,6 +69,7 @@ function Shell() {
     return () => window.removeEventListener('hashchange', on)
   }, [])
   useEffect(() => startSmoothScroll(), [])
+  useEffect(() => startKinetic(), [])
   // every section starts at its top
   useEffect(() => {
     scrollToTarget(0, true)

@@ -302,7 +302,7 @@ export default function Swap() {
             <header className="card-head">
               <div className="card-title">
                 <h2>Swap</h2>
-                <span className="card-live">● live quote · {NETWORK.label}</span>
+                <span className="card-live">live quote · {NETWORK.label}</span>
               </div>
               <div className="slippage" role="radiogroup" aria-label="Price limit" title="How far the price may move before nothing is sent">
                 <span className="slip-label" aria-hidden>limit</span>

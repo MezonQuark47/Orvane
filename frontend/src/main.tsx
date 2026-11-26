@@ -7,6 +7,7 @@ import './index.css'
 import './activity.css'
 import './dex.css'
 import './exchange.css'
+import './polish.css'
 import App from './App.tsx'
 
 createRoot(document.getElementById('root')!).render(

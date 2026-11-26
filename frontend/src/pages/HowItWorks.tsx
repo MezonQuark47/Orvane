@@ -22,7 +22,7 @@ export default function HowItWorks() {
   return (
     <div className="page page-how">
       <div className="narrative">
-        <VaultStage scene="holdings" />
+        <VaultStage scene="how" />
         <p className="eyebrow">How it works</p>
         <h1 className="display">
           <motion.span className="line" {...rise(0)}>

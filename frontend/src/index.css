@@ -1096,14 +1096,8 @@ p.tx-ok.mono {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
-  }
-}
+/* Reduced motion: things that travel or turn stop (polish.css keeps them
+   behind no-preference); light, colour and short hover feedback stay. */
 
 /* ---------- motion system ---------- */
 :root {
@@ -1179,6 +1173,10 @@ p.tx-ok.mono {
 /* lending tips like a balance, so it needs a little more height */
 .stage-lending {
   top: -2vh;
+}
+/* the interlocked rings sit level with the Markets headline */
+.stage-markets {
+  top: -20vh;
 }
 /* the vault door stands behind the right-hand side of the payments desk */
 .stage-payments,

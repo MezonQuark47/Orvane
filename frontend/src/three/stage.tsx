@@ -6,7 +6,7 @@
 
 import type { ReactNode } from 'react'
 
-export type StageScene = 'hero' | 'trade' | 'liquidity' | 'payments' | 'lending' | 'holdings'
+export type StageScene = 'hero' | 'trade' | 'markets' | 'how' | 'liquidity' | 'payments' | 'lending' | 'holdings'
 
 interface StageProps {
   scene: StageScene

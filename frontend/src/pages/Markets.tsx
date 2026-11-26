@@ -24,7 +24,7 @@ export default function Markets() {
   return (
     <div className="page page-markets">
       <div className="narrative">
-        <VaultStage scene="trade" />
+        <VaultStage scene="markets" />
         <p className="eyebrow">Markets · {NETWORK.label}</p>
         <h1 className="display">
           <motion.span className="line" {...rise(0)}>

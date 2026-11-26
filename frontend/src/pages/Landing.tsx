@@ -3,7 +3,7 @@
 // the page is live, from the venue's public pools; nothing here is made up.
 
 import { motion } from 'motion/react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { toNumber } from '../../../shared/decimal.ts'
 import { useDex } from '../ledger/dex.tsx'
 import { NETWORK, VENUE } from '../ledger/network.ts'
@@ -80,18 +80,23 @@ function Split({ text, light, as: Tag = 'h2', className }: { text: string; light
     t.split(' ').map((w, wi) => (
       <span key={`${weight}${wi}`}>
         <span className="ex-word">
-          {[...w].map((c, ci) => (
-            <motion.span
-              key={ci}
-              className="ex-ch"
-              initial={{ y: '110%', opacity: 0, rotate: 6 }}
-              whileInView={{ y: 0, opacity: 1, rotate: 0 }}
-              viewport={{ once: true, amount: 0.6 }}
-              transition={{ duration: 0.9, ease, delay: n++ * 0.018 }}
-            >
-              {c}
-            </motion.span>
-          ))}
+          {[...w].map((c, ci) => {
+            const i = n++
+            return (
+              <motion.span
+                key={ci}
+                className="ex-ch"
+                // the letter's place in the heading, for the light that runs along it (polish.css)
+                style={{ '--i': i } as CSSProperties}
+                initial={{ y: '110%', opacity: 0, rotate: 6 }}
+                whileInView={{ y: 0, opacity: 1, rotate: 0 }}
+                viewport={{ once: true, amount: 0.6 }}
+                transition={{ duration: 0.9, ease, delay: i * 0.018 }}
+              >
+                {c}
+              </motion.span>
+            )
+          })}
         </span>{' '}
       </span>
     ))
@@ -126,7 +131,7 @@ function Hero({ go }: { go: Go }) {
         </p>
         <div className="ex-cta">
           <button className="ex-btn" onClick={() => go('swap')}>
-            Start a swap
+            Start a swap <span className="ex-arrow" aria-hidden>→</span>
           </button>
           <button className="ex-ghost" onClick={() => scrollToTarget(document.getElementById('ex-pool')!)}>
             How it works ↓
