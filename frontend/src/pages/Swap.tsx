@@ -14,6 +14,7 @@ import { useDex } from '../ledger/dex.tsx'
 import { NETWORK, VENUE } from '../ledger/network.ts'
 import type { LoopAccount } from '../ledger/wallet.ts'
 import type { FeeStatus } from '../ledger/fees.ts'
+import { takePair } from '../swap/handoff.ts'
 import { useMarket } from '../swap/market.tsx'
 import { SwapBlocked, WATCH_MS, executeSwap, impactText, orvaneProxy, settleOpenSwaps, type Stage, type SwapResult } from '../swap/execute.ts'
 import { loadSwaps, onSwapsChanged, type SwapRecord } from '../swap/history.ts'
@@ -80,6 +81,15 @@ export default function Swap() {
   // the other side of Canton Coin's deepest pool
   useEffect(() => {
     if (!tokens.length || sellId) return
+    // a pool picked on Markets opens with its pair
+    const picked = takePair()
+    const pickedSell = picked && tokens.find((t) => sameInstrument(t, picked[0]))
+    const pickedBuy = picked && tokens.find((t) => sameInstrument(t, picked[1]))
+    if (pickedSell && pickedBuy) {
+      setSellId(pickedSell)
+      setBuyId(pickedBuy)
+      return
+    }
     const base = cc ?? tokens[0]
     const others = tokens.filter((t) => !sameInstrument(t, base))
     const deepest = market.pools

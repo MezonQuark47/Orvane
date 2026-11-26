@@ -55,6 +55,43 @@ pool reserves, prices and aggregate volumes only. Your swap history is kept in y
 **Supply chain.** The proxy package in `daml/dars/` is Splice's release DAR, unmodified. The wallet SDKs (Digital Asset's dApp SDK, Five North's Loop SDK) are pinned and
 `npm audit` is clean; a vulnerable transitive `uuid` is overridden to a fixed version.
 
+## Swaps through OneSwap (DevNet)
+
+Cantex does not run on DevNet, so there the app swaps through [OneSwap](https://docs.oneswap.cc).
+DevNet is for testing; its coins have no value.
+
+**What a swap is.** The app first opens a swap with OneSwap, which answers with a deposit party for
+that swap. Your wallet then sends the input there as one plain token-standard transfer, with no memo
+and no proxy. OneSwap swaps it and sends the output back to your wallet.
+
+**What is different from Cantex.**
+
+- OneSwap holds each swap to a minimum output, which Orvane sets from the quote you saw and your
+  slippage limit. If OneSwap cannot fill the swap at that minimum, it refunds your input.
+- OneSwap reports the state of each swap, and the app follows it until it is filled, refunded or
+  closed. A swap opened but never paid is cancelled again.
+- The fees are the pool's fee and a network fee, both taken from the input. Orvane adds nothing.
+
+**The forwarder.** OneSwap opens swaps only with an integrator key, which must not reach the
+browser. So on DevNet the app's OneSwap calls go through `/api/oneswap` (`api/oneswap.ts`), a small
+server function that adds the key. It passes on only the calls the app makes, and only to OneSwap's
+DevNet API. It sees what those calls carry: your party, the pair, the amounts and the swap's state.
+It never sees keys and never holds funds; the transfer goes from your wallet straight to OneSwap.
+Anyone who reaches the forwarder can use Orvane's key, which is acceptable on DevNet but not on
+MainNet.
+
+**What Orvane checks.** The same checks as for Cantex run before you sign:
+
+- the quote is checked against the pools' public reserves;
+- the app quotes again and checks the output against your limit;
+- price impact limits apply;
+- your balance is checked.
+
+**Who sees what.** OneSwap sees your party, the swap and the transfer to its deposit party. The
+forwarder sees the OneSwap calls described above. Everyone else sees what they see for Cantex.
+
+More in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
+
 ## The Orvane pool (LocalNet, kept for later)
 
 Orvane's own pool runs only on LocalNet. The rest of this page describes it.

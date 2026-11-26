@@ -201,3 +201,59 @@
 .dialog.picker .picker-search:focus-visible {
   outline: none;
 }
+
+/* ------------------------------------------- the other pages' panels */
+/* Markets, Portfolio, How it works and Liquidity sit in the same glass as
+   the swap card, so moving between pages keeps one material. */
+.page-markets .panel,
+.page-holdings .panel,
+.page-how .panel,
+.page-liquidity .panel {
+  border-radius: 26px;
+  border: 1px solid var(--line-2);
+  background:
+    radial-gradient(120% 60% at 0% 0%, rgba(127, 168, 255, 0.06), transparent 55%),
+    radial-gradient(120% 60% at 100% 100%, rgba(255, 122, 61, 0.05), transparent 55%),
+    rgba(12, 13, 16, 0.62);
+  backdrop-filter: blur(22px) saturate(1.25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+}
+
+/* --------------------------------------------- markets: a pool to swap */
+.market-list li {
+  display: block;
+  padding: 0;
+}
+.market-list li:hover {
+  padding-left: 0;
+}
+.market-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 14px;
+  margin: 2px -10px;
+  padding: 12px 10px;
+  width: calc(100% + 20px);
+  border-radius: 14px;
+  border: 1px solid transparent;
+  color: inherit;
+  text-align: left;
+  transition:
+    background 0.25s,
+    border-color 0.25s;
+}
+.market-row:hover {
+  background: rgba(242, 241, 236, 0.045);
+  border-color: var(--line);
+}
+.market-go {
+  color: var(--faint);
+  transition:
+    color 0.25s,
+    transform 0.35s var(--ease-out-expo);
+}
+.market-row:hover .market-go {
+  color: var(--text);
+  transform: translateX(3px);
+}

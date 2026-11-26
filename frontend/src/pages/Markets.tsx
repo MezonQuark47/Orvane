@@ -3,7 +3,9 @@
 // wallet needed.
 
 import { motion } from 'motion/react'
+import { sameInstrument } from '../../../shared/cantex.ts'
 import { NETWORK, VENUE } from '../ledger/network.ts'
+import { openPair } from '../swap/handoff.ts'
 import { useMarket } from '../swap/market.tsx'
 import { VaultStage } from '../three/stage.tsx'
 import { Panel, Rolling, SkeletonList, TokenIcon, fmt, fmtCompact } from '../ui/bits.tsx'
@@ -20,6 +22,13 @@ export default function Markets() {
   const depth = pools.reduce((s, p) => s + Number(p.tvlCc), 0)
   const ref = NETWORK.cantex ? market.prices[NETWORK.cantex.referenceMarket]?.price : undefined
   const loading = market.status === 'loading'
+  // a pool opens on the swap page with its pair, Canton Coin as the side you send
+  const trade = (p: (typeof pools)[number]) => {
+    const ccFirst = !!market.cc && sameInstrument(p.b, market.cc)
+    if (ccFirst) openPair(p.b, p.a)
+    else openPair(p.a, p.b)
+    window.location.hash = 'swap'
+  }
 
   return (
     <div className="page page-markets">
@@ -61,7 +70,7 @@ export default function Markets() {
         <Panel delay={0.15}>
           <header className="card-head">
             <h3>Pools</h3>
-            <span className="muted small">deepest first</span>
+            <span className="muted small">deepest first · pick one to swap</span>
           </header>
           {loading ? (
             <SkeletonList rows={4} />
@@ -71,24 +80,29 @@ export default function Markets() {
             <ul className="market-list">
               {pools.map((p) => (
                 <li key={p.poolId}>
-                  <span className="market-pair">
-                    <span className="market-icons" aria-hidden>
-                      <TokenIcon symbol={p.a.symbol} size={22} />
-                      <TokenIcon symbol={p.b.symbol} size={22} />
-                    </span>
-                    <span>
-                      <span className="strong">
-                        {p.a.symbol} / {p.b.symbol}
+                  <button type="button" className="market-row" onClick={() => trade(p)}>
+                    <span className="market-pair">
+                      <span className="market-icons" aria-hidden>
+                        <TokenIcon symbol={p.a.symbol} size={22} />
+                        <TokenIcon symbol={p.b.symbol} size={22} />
                       </span>
-                      <span className="muted small mono">
-                        1 {p.a.symbol} = {fmt(Number(p.price), Number(p.price) < 1 ? 6 : 4)} {p.b.symbol}
+                      <span>
+                        <span className="strong">
+                          {p.a.symbol} / {p.b.symbol}
+                        </span>
+                        <span className="muted small mono">
+                          1 {p.a.symbol} = {fmt(Number(p.price), Number(p.price) < 1 ? 6 : 4)} {p.b.symbol}
+                        </span>
                       </span>
                     </span>
-                  </span>
-                  <span className="market-num">
-                    <span className="mono">{fmtCompact(Number(p.tvlCc))} CC</span>
-                    <span className="muted small mono">fee {fmt(Number(p.feeRate) * 100, 2)}%</span>
-                  </span>
+                    <span className="market-num">
+                      <span className="mono">{fmtCompact(Number(p.tvlCc))} CC</span>
+                      <span className="muted small mono">fee {fmt(Number(p.feeRate) * 100, 2)}%</span>
+                    </span>
+                    <svg className="market-go" viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                      <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
                 </li>
               ))}
             </ul>
