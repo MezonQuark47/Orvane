@@ -21,13 +21,20 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { JsonLedger, LedgerError } from '../shared/ledger.ts'
 import { Scan } from '../shared/amulet.ts'
 import { PROXY_TEMPLATE, type ProxyInfo } from '../shared/proxy.ts'
-import { authFor, loadConfig, log } from '../operator/network.ts'
+import { FEATURED_APP_HINT, authFor, loadConfig, log } from '../operator/network.ts'
 
 const PROXY_DAR = new URL('../daml/dars/splice-util-featured-app-proxies-1.2.5.dar', import.meta.url)
 const FEATURED_APP_RIGHT = '#splice-amulet:Splice.Amulet:FeaturedAppRight'
-const PROVIDER_HINT = 'orvane-app'
+const PROVIDER_HINT = FEATURED_APP_HINT
 
 const cfg = await loadConfig()
+// The Featured App rules want the rewarded party kept apart from the party
+// that runs operations (the pool operator) and from the party that holds the
+// Canton Coin lock. See docs/FEATURED-APP.md.
+const reserved = [cfg.operatorHint, cfg.lockingHint].filter((h): h is string => !!h)
+if (reserved.includes(PROVIDER_HINT)) {
+  throw new Error(`config/pairs.${cfg.network}.json reuses '${PROVIDER_HINT}' for another role; the featured app party must be used for nothing else`)
+}
 const auth = authFor(cfg)
 const admin = new JsonLedger(cfg.ledger.url, cfg.ledger.adminUser, auth)
 

@@ -456,3 +456,83 @@ button.wallet-party:hover {
   border-color: rgba(242, 241, 236, 0.45);
   background: rgba(242, 241, 236, 0.06);
 }
+
+/* ---------- markets and how it works ---------- */
+.market-list,
+.route,
+.facts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.market-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.market-list li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.market-pair {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.market-pair > span:last-child,
+.market-num {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.market-num {
+  align-items: flex-end;
+  text-align: right;
+  flex-shrink: 0;
+}
+.market-icons {
+  display: flex;
+  flex-shrink: 0;
+}
+.market-icons > * + * {
+  margin-left: -8px;
+}
+.route {
+  gap: 14px;
+}
+.route li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line-2);
+}
+.narrative .route {
+  max-width: 520px;
+}
+.facts {
+  gap: 12px;
+}
+.facts li {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+  line-height: 1.5;
+}
+.fact-yes {
+  color: var(--verdigris);
+}
+.fact-no {
+  color: var(--usd);
+}
+.page-how .rail p:last-child,
+.page-markets .rail p:last-child {
+  margin-bottom: 0;
+}

@@ -334,6 +334,65 @@ test_funds_come_back_after_the_term_without_the_operator = do
   (_, s) <- poolState env
   s.positions === 0
 
+test_an_expired_position_does_not_stop_the_pool : Script ()
+test_an_expired_position_does_not_stop_the_pool = do
+  env <- setup
+  -- lp1 for 2 days, lp2 for 30
+  short <- placeDeposit env env.lp1 "lp1" 1000.0 2000.0 (days 2)
+  _ <- addLiquidity env short
+  _ <- deposit env env.lp2 "lp2" 500.0 1000.0
+  passTime (days 3)
+  -- the swap prices against lp2 alone and closes lp1 on the way
+  let expected = quoteOut 30 500.0 1000.0 10.0
+  r <- swap env env.trader "s1" env.cc 10.0
+  r.amountOut === expected
+  length r.positionCids === 1
+  (_, s) <- poolState env
+  s.positions === 1
+  s.reserveA === 510.0
+  s.reserveB === 1000.0 - expected
+  closed <- query @PositionClosed env.lp1
+  map (\(_, c) -> c.reason) closed === [TermEnded]
+  (_, p2) <- positionOf env env.lp2
+  p2.amountA === 510.0
+  -- lp1's allocations were never touched and come back to lp1
+  allocs <- allocationsOf env.lp1
+  forA_ allocs $ \(cid, v) -> do
+    let instrument = if v.allocation.admin == env.cc.admin then env.cc else env.usd
+    ds <- disclosures env
+    submit (actAs env.lp1 <> discloseMany ds) $
+      exerciseCmd cid A.Allocation_Withdraw with actors = [env.lp1]; extraArgs = ctx env instrument
+  free env.lp1 env.cc >>= (=== 100000.0)
+  free env.lp1 env.usd >>= (=== 100000.0)
+  checkBooks env
+
+test_the_desk_refuses_bad_orders_before_locking : Script ()
+test_the_desk_refuses_bad_orders_before_locking = do
+  env <- twoProviders
+  now <- getTime
+  asOf <- asOfNow
+  ds <- walletDisclosures env
+  holdings <- freeHoldings env.trader env.cc
+  let order = OrderDesk_Swap with
+        trader = env.trader
+        requestId = "bad"
+        instrumentIn = env.cc
+        amountIn = 10.0
+        instrumentOut = env.usd
+        minOut = 1.0
+        deadline = addRelTime now (minutes 10)
+        allocationFactory = toInterfaceContractId env.ccRules
+        inputHoldingCids = holdings
+        requestedAt = asOf
+        extraArgs = ctx env env.cc
+      place o = submitMustFail (actAs env.trader <> discloseMany ds) $ exerciseCmd env.desk o
+  place order with amountIn = 0.0
+  place order with minOut = 0.0
+  place order with instrumentOut = env.cc
+  place order with requestId = ""
+  place order with deadline = addRelTime now (minutes (-1))
+  free env.trader env.cc >>= (=== 100000.0)
+
 test_drop_is_only_allowed_after_the_term : Script ()
 test_drop_is_only_allowed_after_the_term = do
   env <- twoProviders

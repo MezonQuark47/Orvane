@@ -102,3 +102,8 @@ lock. Create it once, on the validator you will keep.
 | The proxy package on Loop's validators | Five North |
 | A first small MainNet swap (at least 50 CC) through the site | you |
 | The site live on MainNet; the form asks how long it has been live | you |
+| 5,000,000 CC locked for the `orvane-app` party (CIP-0116), from a separate locking party | you and the lock provider |
+| A security audit, before the asset-moving tier | you and the auditor |
+
+The full requirements, the party roles and the plan are in [docs/FEATURED-APP.md](docs/FEATURED-APP.md).
+The audit scope is in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).

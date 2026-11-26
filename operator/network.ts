@@ -19,6 +19,12 @@ export interface NetworkConfig {
   userParticipants: string[]
   scan: string
   operatorHint: string
+  /**
+   * The party that holds the Featured App Canton Coin lock (CIP-0116), when
+   * Orvane hosts it. Kept apart from the operator and the featured app party;
+   * nothing here acts for it.
+   */
+  lockingHint?: string
   testTokens: Array<{ id: string; adminHint: string; label: string }>
   instruments: Record<string, { registry: 'scan' | 'testToken'; id: string; label: string }>
   pools: Array<{
@@ -61,7 +67,7 @@ export function authFor(cfg: NetworkConfig): LedgerAuth {
 }
 
 const DARS = [
-  new URL('../daml/orvane/.daml/dist/orvane-0.1.0.dar', import.meta.url),
+  new URL('../daml/orvane/.daml/dist/orvane-0.2.0.dar', import.meta.url),
   // the official test token, for LocalNet pairs; a no-op where it is loaded
   new URL('../daml/dars/splice-test-token-v2-1.0.2.dar', import.meta.url),
 ]
@@ -113,8 +119,14 @@ async function ensureParty(admin: JsonLedger, hint: string, known: string[]) {
   return known.find((p) => p.startsWith(`${hint}::`)) ?? (await admin.allocateParty(hint))
 }
 
+/** The featured app party (scripts/proxy-setup.ts); used for nothing else. */
+export const FEATURED_APP_HINT = 'orvane-app'
+
 export async function connect(opts: { setup: boolean } = { setup: true }): Promise<Network> {
   const cfg = await loadConfig()
+  if (cfg.operatorHint === FEATURED_APP_HINT || cfg.operatorHint === cfg.lockingHint) {
+    throw new Error(`config/pairs.${cfg.network}.json: the operator needs a party of its own, not '${cfg.operatorHint}'`)
+  }
   const admin = new JsonLedger(cfg.ledger.url, cfg.ledger.adminUser, authFor(cfg))
   await retry(`ledger at ${cfg.ledger.url}`, () => admin.ledgerEnd(), 90)
   if (opts.setup) await uploadDars(cfg)

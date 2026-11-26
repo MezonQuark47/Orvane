@@ -17,7 +17,7 @@ import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
 import DA.Action (when)
 import DA.Foldable (forA_)
 import DA.List ((!!), unique)
-import DA.Time (RelTime, addRelTime, days, minutes)
+import DA.Time (RelTime, addRelTime, days, isLedgerTimeLT, minutes)
 
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.HoldingV2 qualified as H
@@ -133,19 +133,32 @@ template PoolRules
         require "the request trades this pool's pair"
           (aToB || (req.instrumentIn == instrumentB && req.instrumentOut == instrumentA))
 
-        -- every open position takes part, and each still holds what we think
-        positions <- forA positionCids (fetchPosition operator poolId)
-        requireEq "positions in the swap" (length positions) state.positions
+        -- every open position is listed, and together they match the books
+        allPositions <- forA positionCids (fetchPosition operator poolId)
+        requireEq "positions in the swap" (length allPositions) state.positions
         require "no position is listed twice" (unique positionCids)
+        requireEq "reserve A" (sum (map (.amountA) allPositions)) state.reserveA
+        requireEq "reserve B" (sum (map (.amountB) allPositions)) state.reserveB
+
+        -- positions whose term is over leave the books on the way, so one
+        -- expired position cannot stop the pool; the registry hands their
+        -- funds back to the provider, as with PoolRules_DropExpired
+        lives <- forA allPositions (\p -> isLedgerTimeLT p.termEnd)
+        let tagged = zip3 positionCids allPositions lives
+            expired = [ (cid, p) | (cid, p, live) <- tagged, not live ]
+            positionCidsLive = [ cid | (cid, _, live) <- tagged, live ]
+            positions = [ p | (_, p, live) <- tagged, live ]
+        forA_ expired $ \(cid, p) -> recordClose cid p TermEnded asOf
+        require "the pool has a position inside its term" (not (null positions))
         let settlement = poolSettlement operator poolId
         forA_ positions (checkLive settlement)
-        requireEq "reserve A" (sum (map (.amountA) positions)) state.reserveA
-        requireEq "reserve B" (sum (map (.amountB) positions)) state.reserveB
+        let liveReserveA = sum (map (.amountA) positions)
+            liveReserveB = sum (map (.amountB) positions)
 
         -- price it
         let sideIn p = if aToB then (p.allocationA, p.amountA) else (p.allocationB, p.amountB)
             sideOut p = if aToB then (p.allocationB, p.amountB) else (p.allocationA, p.amountA)
-            (reserveIn, reserveOut) = if aToB then (state.reserveA, state.reserveB) else (state.reserveB, state.reserveA)
+            (reserveIn, reserveOut) = if aToB then (liveReserveA, liveReserveB) else (liveReserveB, liveReserveA)
             out = quoteOut feeBps reserveIn reserveOut req.amountIn
         require "the swap pays out something" (out > 0.0)
         require "the pool keeps some of the output asset" (out < reserveOut)
@@ -213,11 +226,11 @@ template PoolRules
             debit p (cid, y) = if aToB then p with allocationB = cid; amountB = p.amountB - y
                                        else p with allocationA = cid; amountA = p.amountA - y
             updated = [ (cid, p, optional p (credit p) (lookup i credits), lookup i debits)
-                      | (i, cid, p) <- zip3 [0 .. n - 1] positionCids positions ]
+                      | (i, cid, p) <- zip3 [0 .. n - 1] positionCidsLive positions ]
             moved = [ (cid, optional p' (debit p') d, p /= p' || d /= None) | (cid, p, p', d) <- updated ]
             (newReserveA, newReserveB) =
-              if aToB then (state.reserveA + req.amountIn, state.reserveB - out)
-                      else (state.reserveA - out, state.reserveB + req.amountIn)
+              if aToB then (liveReserveA + req.amountIn, liveReserveB - out)
+                      else (liveReserveA - out, liveReserveB + req.amountIn)
         requireEq "reserve A after the swap" (sum [ p.amountA | (_, p, _) <- moved ]) newReserveA
         requireEq "reserve B after the swap" (sum [ p.amountB | (_, p, _) <- moved ]) newReserveB
         newPositions <- forA moved $ \(cid, p, changed) ->
@@ -227,6 +240,7 @@ template PoolRules
         newState <- create state with
           reserveA = newReserveA
           reserveB = newReserveB
+          positions = length positions
           swaps = state.swaps + 1
         receiptCid <- create SwapReceipt with
           operator
@@ -410,8 +424,18 @@ checkLive settlement p = do
 
 closePosition : PoolState -> ContractId PoolState -> ContractId LpPosition -> LpPosition -> CloseReason -> Time -> Update (ContractId PoolState)
 closePosition state stateCid positionCid p reason asOf = do
-  archive positionCid
   archive stateCid
+  recordClose positionCid p reason asOf
+  create state with
+    reserveA = state.reserveA - p.amountA
+    reserveB = state.reserveB - p.amountB
+    positions = state.positions - 1
+
+-- | Take a position off the books and leave the provider a record of it.
+-- The caller updates the pool state.
+recordClose : ContractId LpPosition -> LpPosition -> CloseReason -> Time -> Update ()
+recordClose positionCid p reason asOf = do
+  archive positionCid
   _ <- create PositionClosed with
     operator = p.operator
     provider = p.provider
@@ -423,7 +447,4 @@ closePosition state stateCid positionCid p reason asOf = do
     amountB = p.amountB
     reason
     closedAt = asOf
-  create state with
-    reserveA = state.reserveA - p.amountA
-    reserveB = state.reserveB - p.amountB
-    positions = state.positions - 1
+  pure ()

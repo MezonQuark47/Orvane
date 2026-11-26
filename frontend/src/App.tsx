@@ -20,6 +20,8 @@ const Particles = lazy(() => import('./three/Particles.tsx'))
 // the Orvane pool's pages run on LocalNet only; other networks never load them
 const Liquidity = lazy(() => import('./pages/Liquidity.tsx'))
 const PoolSwap = lazy(() => import('./pages/PoolSwap.tsx'))
+const Markets = lazy(() => import('./pages/Markets.tsx'))
+const HowItWorks = lazy(() => import('./pages/HowItWorks.tsx'))
 
 // Phones get a still backdrop instead of the live particles, so they never
 // download three.js or spend battery on it.
@@ -28,11 +30,14 @@ if (STILL) document.documentElement.classList.add('still-vault')
 
 const ALL_TABS = [
   { key: 'swap', label: 'Swap', scene: 'trade' },
+  { key: 'markets', label: 'Markets', scene: 'trade' },
   { key: 'liquidity', label: 'Liquidity', scene: 'liquidity' },
   { key: 'portfolio', label: 'Portfolio', scene: 'holdings' },
+  { key: 'how', label: 'How it works', scene: 'holdings' },
 ] as const
 // Liquidity is the Orvane pool, kept for later; it only shows where the pool runs (LocalNet).
-const TABS = ALL_TABS.filter((t) => t.key !== 'liquidity' || NETWORK.pool)
+// Markets lists the venue's pools, so it only shows where there is a venue.
+const TABS = ALL_TABS.filter((t) => (t.key !== 'liquidity' || NETWORK.pool) && (t.key !== 'markets' || VENUE))
 // 'home' is the landing; it has no tab of its own, the wordmark leads there
 export type Tab = (typeof ALL_TABS)[number]['key'] | 'home'
 
@@ -164,6 +169,16 @@ function Shell() {
                     </Suspense>
                   )}
                   {tab === 'portfolio' && <Portfolio />}
+                  {tab === 'markets' && VENUE && (
+                    <Suspense fallback={<PageSkeleton />}>
+                      <Markets />
+                    </Suspense>
+                  )}
+                  {tab === 'how' && (
+                    <Suspense fallback={<PageSkeleton />}>
+                      <HowItWorks />
+                    </Suspense>
+                  )}
                 </>
               )}
             </motion.div>

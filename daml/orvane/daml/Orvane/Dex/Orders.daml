@@ -7,6 +7,7 @@
 -- reject.
 module Orvane.Dex.Orders where
 
+import DA.Assert (assertWithinDeadline)
 import DA.Foldable (forA_)
 import DA.Text qualified as T
 import DA.TextMap qualified as TextMap
@@ -66,6 +67,12 @@ template OrderDesk
         extraArgs : ExtraArgs
       controller trader
       do
+        -- fail with a clear reason before anything is locked
+        require "the swap sends something" (amountIn > 0.0)
+        require "the swap asks for something back" (minOut > 0.0)
+        require "the swap trades two different instruments" (instrumentIn /= instrumentOut)
+        require "the request has an id" (not (T.isEmpty requestId))
+        assertWithinDeadline "swap deadline" deadline
         let input = leg (requestId <> "/in") trader operator amountIn instrumentIn.id
         inputAllocation <- allocate instrumentIn.admin allocationFactory AI.AllocationFactory_Allocate with
           settlement = poolSettlement operator poolId
@@ -96,6 +103,11 @@ template OrderDesk
         requestedAt : Time
       controller provider
       do
+        require "the deposit adds some of the first asset" (amountA > 0.0)
+        require "the deposit adds some of the second asset" (amountB > 0.0)
+        require "the deposit pairs two different instruments" (instrumentA /= instrumentB)
+        require "the request has an id" (not (T.isEmpty requestId))
+        assertWithinDeadline "term end" termEnd
         let lock instrument amount factory holdings args =
               allocate instrument.admin factory AI.AllocationFactory_Allocate with
                 settlement = poolSettlement operator poolId
