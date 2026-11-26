@@ -1,11 +1,11 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { LayoutGroup, motion } from 'motion/react'
-import { Suspense, lazy, useEffect, useId, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { DexProvider, useDex } from './ledger/dex.tsx'
 import { GATEWAY_URL } from './ledger/gateway.ts'
 import type { ExtensionWallet, WalletKind } from './ledger/wallet.ts'
 import { ActivityDock, ActivityProvider, Toasts } from './ui/activity.tsx'
-import { PageSkeleton, shortParty } from './ui/bits.tsx'
+import { PageSkeleton } from './ui/bits.tsx'
 import { errorText } from './ui/errors.ts'
 import Landing from './pages/Landing.tsx'
 import Portfolio from './pages/Portfolio.tsx'
@@ -14,6 +14,7 @@ import { NETWORK, VENUE } from './ledger/network.ts'
 import { MarketProvider, useMarket } from './swap/market.tsx'
 
 import { startKinetic } from './ui/kinetic.ts'
+import { WalletMenu } from './ui/WalletMenu.tsx'
 import { scrollToTarget, startSmoothScroll } from './ui/smooth.ts'
 import type { StageScene } from './three/stage.tsx'
 
@@ -130,7 +131,7 @@ function Shell() {
               ))}
             </nav>
           </LayoutGroup>
-          <WalletButton />
+          <WalletMenu />
         </header>
 
         {(status === 'offline' || market.status === 'offline') && tab !== 'home' ? (
@@ -203,63 +204,6 @@ function Shell() {
   )
 }
 
-
-function WalletButton() {
-  const { wallet, disconnect } = useDex()
-  const tip = useId()
-  // the full party id goes to the clipboard; the tip says so for a moment
-  const [copied, setCopied] = useState<'yes' | 'no'>()
-  useEffect(() => {
-    if (!copied) return
-    const t = setTimeout(() => setCopied(undefined), 1600)
-    return () => clearTimeout(t)
-  }, [copied])
-  if (wallet.phase === 'connected') {
-    const party = wallet.session.party
-    const copy = () =>
-      navigator.clipboard.writeText(party).then(
-        () => setCopied('yes'),
-        () => setCopied('no'),
-      )
-    return (
-      <div className="wallet">
-        <span className={`has-tip ${copied ? 'tip-on' : ''}`}>
-          <button className="wallet-party mono" onClick={copy} aria-describedby={tip} aria-label={`Copy your party id ${party}`}>
-            <span className="wallet-dot" aria-hidden /> <span className="party-long">{shortParty(party)}</span>
-            <span className="party-short">{compactParty(party)}</span>
-          </button>
-          <span id={tip} role="tooltip" className="tip" aria-live="polite">
-            {copied === 'yes'
-              ? 'Party id copied.'
-              : copied === 'no'
-                ? 'Could not copy; your browser blocked the clipboard.'
-                : `Signed in with ${wallet.session.name}. Click to copy your party id. Orvane never sees your keys.`}
-          </span>
-        </span>
-        <button className="link small wallet-off" onClick={() => disconnect()} aria-label="Disconnect your wallet" title="Disconnect">
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
-            <path d="M8 1.8v5.4M4.6 3.9a5.4 5.4 0 1 0 6.8 0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-          <span className="wallet-off-label">Disconnect</span>
-        </button>
-      </div>
-    )
-  }
-  return (
-    <div className="wallet">
-      <button className="wallet-connect" onClick={() => window.dispatchEvent(new CustomEvent('orvane:connect'))} disabled={wallet.phase === 'connecting'}>
-        {wallet.phase === 'connecting' ? 'Connecting…' : 'Connect wallet'}
-      </button>
-    </div>
-  )
-}
-
-// A party id as a person can tell it apart at a glance: the start of its name
-// and the end of its key, e.g. "88476c…f219".
-function compactParty(party: string) {
-  const [hint, key = ''] = party.split('::')
-  return `${hint.slice(0, 6)}…${key.slice(-4)}`
-}
 
 // The wallets that speak CIP-0103 on this network.
 function ConnectDialog() {
@@ -344,29 +288,56 @@ function ConnectDialog() {
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content className="dialog wallet-dialog">
-          <Dialog.Title>Connect a wallet</Dialog.Title>
-          <Dialog.Description className="muted">
-            Pick the wallet you use on {NETWORK.label}. You approve every swap in the wallet itself; Orvane never sees your keys and can't move anything on its
-            own.
-          </Dialog.Description>
+          <div className="wallet-dialog-head">
+            <p className="eyebrow">{NETWORK.label}</p>
+            <Dialog.Title>Connect a wallet</Dialog.Title>
+            <Dialog.Close className="wallet-dialog-x" aria-label="Close">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                <path d="m4 4 8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </Dialog.Close>
+          </div>
+          <Dialog.Description className="muted wallet-dialog-lede">Pick the wallet you use on {NETWORK.label}.</Dialog.Description>
           <ul className="wallet-options">
-            {options.map((o) => (
-              <li key={o.key}>
-                <button disabled={!o.available || wallet.phase === 'connecting'} onClick={() => pick(o)}>
-                  <span className="wallet-name">
-                    {/* an extension's own icon, when it is inline data (the site's CSP allows no other images) */}
-                    {o.icon?.startsWith('data:image/') && <img className="wallet-icon" src={o.icon} alt="" width={18} height={18} />}
-                    {o.name}
-                  </span>
-                  <span className="muted small">{o.detail}</span>
-                  {o.note && <span className="wallet-note mono small">{o.note}</span>}
-                  {wallet.phase === 'connecting' && picked === o.key && <span className="wallet-note small">waiting for the wallet…</span>}
-                </button>
-              </li>
-            ))}
+            {options.map((o) => {
+              const waiting = wallet.phase === 'connecting' && picked === o.key
+              return (
+                <li key={o.key}>
+                  <button className={waiting ? 'is-waiting' : ''} disabled={!o.available || wallet.phase === 'connecting'} onClick={() => pick(o)}>
+                    <span className="wallet-tile" aria-hidden>
+                      {/* an extension's own icon, when it is inline data (the site's CSP allows no other images) */}
+                      {o.icon?.startsWith('data:image/') ? <img src={o.icon} alt="" width={22} height={22} /> : <span>{o.name.slice(0, 1)}</span>}
+                    </span>
+                    <span className="wallet-option-text">
+                      <span className="wallet-name">{o.name}</span>
+                      <span className="muted small">{o.detail}</span>
+                      {o.note && <span className="wallet-note mono small">{o.note}</span>}
+                    </span>
+                    <span className="wallet-option-end" aria-hidden>
+                      {waiting ? (
+                        <span className="wallet-spin" />
+                      ) : !o.available ? (
+                        <span className="wallet-badge mono">Unavailable</span>
+                      ) : (
+                        <svg viewBox="0 0 16 16" width="14" height="14">
+                          <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </span>
+                    {waiting && <span className="sr-only">waiting for the wallet</span>}
+                  </button>
+                </li>
+              )
+            })}
           </ul>
           {error && <p className="tx-error">{error}</p>}
-          <Dialog.Close className="link small dialog-close">Close</Dialog.Close>
+          <p className="wallet-dialog-foot small">
+            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+              <rect x="3" y="7" width="10" height="7" rx="1.8" fill="none" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+            </svg>
+            You approve every swap in the wallet itself. Orvane never sees your keys and can&apos;t move anything on its own.
+          </p>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

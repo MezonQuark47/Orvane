@@ -1,0 +1,368 @@
+/* The wallet: the connect button, the signed-in chip and its menu, and the
+   connect dialog. Same graphite glass, hairlines and warm white as the rest
+   of the exchange; the two token colours appear only in the party orb. */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.wallet {
+  position: relative;
+}
+
+/* ---------------------------------------------------------------- connect */
+.wallet-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px 0 14px;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.wallet-connect svg {
+  opacity: 0.8;
+}
+
+/* a small ring that turns while a wallet answers */
+.wallet-spin {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  animation: wallet-spin 0.8s linear infinite;
+}
+@keyframes wallet-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------------- party orb */
+.party-orb {
+  display: inline-block;
+  flex: none;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at var(--orb-x) var(--orb-y), rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 38%),
+    conic-gradient(from var(--orb-a), var(--cc), #c9d8ff, var(--usd), #ffc6a8, var(--cc));
+  box-shadow:
+    inset 0 -3px 6px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(242, 241, 236, 0.14);
+}
+
+/* ------------------------------------------------------------------ chip */
+.wallet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: linear-gradient(180deg, rgba(242, 241, 236, 0.06), rgba(242, 241, 236, 0.015));
+  color: var(--text);
+  transition:
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+.wallet-chip:hover,
+.wallet-chip.is-open {
+  border-color: rgba(242, 241, 236, 0.34);
+  background: linear-gradient(180deg, rgba(242, 241, 236, 0.1), rgba(242, 241, 236, 0.03));
+}
+.wallet-chip-orb {
+  position: relative;
+  display: inline-flex;
+  padding: 3px;
+}
+.wallet-chip-orb .party-orb {
+  width: 26px !important;
+  height: 26px !important;
+}
+.wallet-live {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--verdigris);
+  box-shadow: 0 0 0 2px var(--ink-1);
+}
+.wallet-live.inline {
+  position: static;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  box-shadow: 0 0 0 3px rgba(124, 227, 155, 0.16);
+  vertical-align: 1px;
+}
+.wallet-chip-text {
+  display: grid;
+  line-height: 1.15;
+  text-align: left;
+}
+.wallet-chip-name {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.wallet-chip-party {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.wallet-chev {
+  color: var(--muted);
+  transition: transform 0.3s var(--ease-out);
+}
+.wallet-chip.is-open .wallet-chev {
+  transform: rotate(180deg);
+}
+
+/* ------------------------------------------------------------------ menu */
+.wallet-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 60;
+  width: 320px;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid var(--line-2);
+  background: rgba(14, 15, 18, 0.92);
+  backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow:
+    0 30px 80px -24px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(242, 241, 236, 0.06);
+  transform-origin: top right;
+  animation: wallet-menu-in 0.28s var(--ease-out);
+}
+@keyframes wallet-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+}
+.wallet-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.wallet-menu-name {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.wallet-menu-net {
+  font-size: 11px;
+  color: var(--muted);
+}
+.wallet-menu-party {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 6px 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.28);
+}
+.wallet-menu-label {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.wallet-menu-party code {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+  word-break: break-all;
+}
+.wallet-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+  transition:
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+.wallet-copy:hover {
+  border-color: rgba(242, 241, 236, 0.4);
+  background: rgba(242, 241, 236, 0.06);
+}
+.wallet-menu-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.wallet-disconnect {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--muted);
+  transition:
+    color var(--dur-fast),
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+.wallet-disconnect:hover {
+  color: var(--usd);
+  border-color: rgba(255, 122, 61, 0.4);
+  background: rgba(255, 122, 61, 0.07);
+}
+
+/* ---------------------------------------------------------------- dialog */
+.wallet-dialog {
+  width: min(440px, calc(100vw - 32px));
+  gap: 16px;
+  padding: 24px;
+  border-radius: 24px;
+  background: rgba(14, 15, 18, 0.94);
+  backdrop-filter: blur(20px) saturate(1.2);
+}
+.wallet-dialog-head {
+  position: relative;
+  display: grid;
+  gap: 6px;
+}
+.wallet-dialog-head .eyebrow {
+  margin: 0;
+}
+.wallet-dialog h2 {
+  font-family: var(--sans);
+  font-weight: 650;
+  font-size: 26px;
+  letter-spacing: -0.035em;
+}
+.wallet-dialog-x {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  transition:
+    color var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.wallet-dialog-x:hover {
+  color: var(--text);
+  border-color: var(--line-2);
+}
+.wallet-dialog-lede {
+  margin: -6px 0 0;
+  font-size: 14px;
+}
+.wallet-options {
+  gap: 8px;
+}
+.wallet-options button {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px 12px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(242, 241, 236, 0.02);
+  transition:
+    border-color var(--dur-fast),
+    background var(--dur-fast),
+    transform 0.3s var(--ease-out);
+}
+.wallet-options button:hover:not(:disabled) {
+  border-color: rgba(242, 241, 236, 0.3);
+  background: rgba(242, 241, 236, 0.05);
+  transform: translateX(2px);
+}
+.wallet-options button.is-waiting {
+  border-color: rgba(127, 168, 255, 0.45);
+  background: rgba(127, 168, 255, 0.06);
+  opacity: 1;
+}
+.wallet-tile {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid var(--line-2);
+  background: linear-gradient(160deg, rgba(242, 241, 236, 0.1), rgba(242, 241, 236, 0.02));
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text);
+}
+.wallet-tile img {
+  border-radius: 6px;
+}
+.wallet-option-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.wallet-option-text .muted {
+  line-height: 1.4;
+}
+.wallet-name {
+  font-size: 14.5px;
+  font-weight: 550;
+}
+.wallet-option-end {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.wallet-options button:hover:not(:disabled) .wallet-option-end {
+  color: var(--text);
+}
+.wallet-badge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+.wallet-dialog-foot {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 2px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  line-height: 1.5;
+  color: var(--muted);
+}
+.wallet-dialog-foot svg {
+  flex: none;
+  margin-top: 2px;
+}
