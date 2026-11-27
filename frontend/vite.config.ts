@@ -25,6 +25,9 @@ export default defineConfig(({ mode }) => {
           target: 'https://devnet.api.oneswap.cc',
           changeOrigin: true,
           headers: oneswapKey ? { 'x-sdk-key': oneswapKey } : undefined,
+          // like api/oneswap.ts, a server-side call: the browser's Origin is not
+          // passed on, since OneSwap checks it against the key's allowed sites
+          configure: (proxy) => proxy.on('proxyReq', (req) => req.removeHeader('origin')),
           rewrite: (p: string) => {
             const u = new URL(p, 'http://local')
             const path = u.searchParams.get('path') ?? ''

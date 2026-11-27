@@ -22,9 +22,16 @@ export interface Activity {
   error?: Explained
   /** the toast was closed or timed out */
   seen?: boolean
+  /** somewhere to follow up, such as the wallet */
+  link?: ActivityLink
 }
 
-type Patch = { title?: string; detail?: string }
+export interface ActivityLink {
+  href: string
+  label: string
+}
+
+type Patch = { title?: string; detail?: string; link?: ActivityLink }
 
 // Actions are stable across renders, so pages can call them from effects
 // without re-running every time a toast changes.
@@ -161,9 +168,10 @@ function Toast({ a, onClose, onOpen }: { a: Activity; onClose: () => void; onOpe
   close.current = onClose
   useEffect(() => {
     if (a.status === 'pending') return
-    const t = setTimeout(() => close.current(), a.status === 'failed' ? 9000 : 4800)
+    // one with a link to follow stays up long enough to use it
+    const t = setTimeout(() => close.current(), a.status === 'failed' || a.link ? 9000 : 4800)
     return () => clearTimeout(t)
-  }, [a.status, a.updated])
+  }, [a.status, a.updated, a.link])
 
   const [head, line] =
     a.status === 'failed'
@@ -186,12 +194,21 @@ function Toast({ a, onClose, onOpen }: { a: Activity; onClose: () => void; onOpe
         <strong>{head}</strong>
         <span>{line}</span>
       </button>
+      {a.link && <LinkOut link={a.link} />}
       <button className="toast-x" onClick={onClose} aria-label="Dismiss">
         <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden>
           <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
         </svg>
       </button>
     </motion.div>
+  )
+}
+
+function LinkOut({ link }: { link: ActivityLink }) {
+  return (
+    <a className="toast-link" href={link.href} target="_blank" rel="noreferrer">
+      {link.label} ↗
+    </a>
   )
 }
 
@@ -311,6 +328,7 @@ export function ActivityDock({ hidden }: { hidden?: boolean }) {
                         ) : (
                           a.detail && <p className="feed-detail mono">{a.detail}</p>
                         )}
+                        {a.link && <LinkOut link={a.link} />}
                         {a.who && <span className="feed-who">as {a.who}</span>}
                       </div>
                     </li>

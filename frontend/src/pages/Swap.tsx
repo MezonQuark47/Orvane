@@ -21,7 +21,7 @@ import { loadSwaps, onSwapsChanged, type SwapRecord } from '../swap/history.ts'
 import { TokenPicker } from '../swap/picker.tsx'
 import { VaultStage } from '../three/stage.tsx'
 import { signalSettled } from '../three/settle.ts'
-import { useActivity } from '../ui/activity.tsx'
+import { useActivity, type ActivityLink } from '../ui/activity.tsx'
 import { ConnectFirst, EyeIcon, Panel, Rolling, Sparkline, fmt, fmtCompact } from '../ui/bits.tsx'
 import { errorText } from '../ui/errors.ts'
 import { clockTime, dateTime } from '../ui/time.ts'
@@ -210,8 +210,6 @@ export default function Swap() {
   const steep = !!check && impact > CONFIRM_IMPACT_BPS && !tooThin
   // a tick holds while the impact stays within a point of what was accepted
   const impactOk = !steep || (acceptedImpact !== undefined && impact <= acceptedImpact + 100)
-  // a swap the wallet never confirmed can still land; it is worth a look before swapping again
-  const unconfirmed = swaps.find((r) => r.status === 'unconfirmed' && Date.now() - r.at < WATCH_MS)
   const busy = tx.phase === 'busy'
   const reference = NETWORK.cantex ? prices[NETWORK.cantex.referenceMarket] : undefined
   // Canton Coin's price in a dollar pool, next to its market price
@@ -234,6 +232,8 @@ export default function Swap() {
   const feeShort = !!fee?.topUp && !insufficient && !belowMin
   const disabled = !party || !quote || stale || busy || insufficient || belowMin || !check?.agrees || !canReceive || feeShort || tooThin || !impactOk || amount <= ZERO
   const walletName = wallet.phase === 'connected' ? wallet.session.name : 'your wallet'
+  const walletLink: ActivityLink | undefined =
+    wallet.phase === 'connected' && wallet.session.walletUrl ? { href: wallet.session.walletUrl, label: `Check in ${walletName}` } : undefined
 
   const submit = async () => {
     if (disabled || !quote || !api || !cc || !sell || !buy) return
@@ -267,7 +267,12 @@ export default function Swap() {
       } else if (r.status === 'pending') {
         activity.done(id, { detail: NETWORK.oneswap ? 'Sent, not filled yet; this page keeps watching. OneSwap refunds a swap it cannot fill.' : 'Sent, not filled yet; this page keeps watching. If Cantex cannot fill it, cancel the pending transfer in your wallet.' })
       } else {
-        activity.done(id, { detail: `${walletName} did not confirm the swap and nothing has left your wallet so far. Check ${walletName} before you swap again.` })
+        // a notice beside the card, not in it: the user can swap again right away
+        activity.done(id, {
+          detail: `${walletName} did not confirm the swap and nothing has left your wallet so far. If you signed it, it can still go through until ${clockTime(r.at + SWAP_TRANSFER_TTL_MS)}.`,
+          link: walletLink,
+        })
+        setTx({ phase: 'idle' })
       }
     } catch (e) {
       const message = e instanceof SwapBlocked ? e.message : errorText(e)
@@ -481,13 +486,6 @@ export default function Swap() {
                 )}
               </div>
             )}
-            {party && unconfirmed && !busy && !(tx.phase === 'done' && tx.outcome === 'unconfirmed') && (
-              <p className="tx-warn">
-                Your swap of {fmt(Number(unconfirmed.sell.amount), 4)} {market.token(unconfirmed.sell)?.symbol ?? unconfirmed.sell.id} at {clockTime(unconfirmed.at)} is not
-                confirmed: {walletName} did not say whether it sent it. If you signed it, it can still go through until {clockTime(unconfirmed.at + SWAP_TRANSFER_TTL_MS)}.
-                Check {walletName} before you swap again.
-              </p>
-            )}
             {party && !canReceive && buy && (
               <div className="tx-warn">
                 Your wallet can't receive {buy.symbol} in one step yet. {VENUE ?? 'The venue'} needs that to send the swap back to you.
@@ -584,18 +582,12 @@ export default function Swap() {
                     Sent, not filled yet; this page keeps watching.{' '}{NETWORK.oneswap ? 'OneSwap refunds a swap it cannot fill.' : "If Cantex can't fill it, the transfer stays pending: cancel it in your wallet and your funds come back."}
                   </p>
                 )}
-                {tx.phase === 'done' && tx.outcome === 'unconfirmed' && (
-                  <p className="tx-warn">
-                    {walletName} did not say whether it sent the swap, and nothing has left your wallet so far. If you signed it, it can still go through until{' '}
-                    {clockTime(tx.until)}; this page keeps watching. Check {walletName} before you swap again.
-                  </p>
-                )}
               </motion.div>
             )}
           </div>
         </Panel>
 
-        {party && <History rows={swaps} pendingOut={mine.outgoing.filter((o) => o.receiver === NETWORK.cantex?.swapParty).length} />}
+        {party && <History rows={swaps} walletLink={walletLink} pendingOut={mine.outgoing.filter((o) => o.receiver === NETWORK.cantex?.swapParty).length} />}
       </div>
     </div>
   )
@@ -713,7 +705,7 @@ function statusText(r: SwapRecord) {
   }
 }
 
-function History({ rows, pendingOut }: { rows: SwapRecord[]; pendingOut: number }) {
+function History({ rows, pendingOut, walletLink }: { rows: SwapRecord[]; pendingOut: number; walletLink?: ActivityLink }) {
   const market = useMarket()
   const sym = (i: Instrument) => market.token(i)?.symbol ?? i.id
   return (
@@ -736,6 +728,14 @@ function History({ rows, pendingOut }: { rows: SwapRecord[]; pendingOut: number 
                 <span className="muted small">
                   {statusText(r)}
                   {r.route === 'orvane' && ' · via Orvane'}
+                  {r.status === 'unconfirmed' && walletLink && (
+                    <>
+                      {' · '}
+                      <a href={walletLink.href} target="_blank" rel="noreferrer">
+                        {walletLink.label} ↗
+                      </a>
+                    </>
+                  )}
                 </span>
                 <span className="cid mono">{dateTime(new Date(r.at))}</span>
               </motion.li>
