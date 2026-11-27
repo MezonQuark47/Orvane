@@ -31,3 +31,6 @@ log/
 
 # LocalNet wallet gateway data (keys of local test wallets)
 .localnet/
+
+# Cloudflare wrangler local state
+.wrangler/

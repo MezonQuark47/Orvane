@@ -1,0 +1,11 @@
+# Security headers for Cloudflare Pages, the same as vercel.json (keep both in step).
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://api.cantex.io wss://api.cantex.io https://api.testnet.cantex.io wss://api.testnet.cantex.io https://cantonloop.com wss://cantonloop.com https://testnet.cantonloop.com wss://testnet.cantonloop.com https://devnet.cantonloop.com wss://devnet.cantonloop.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests
+  Strict-Transport-Security: max-age=63072000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

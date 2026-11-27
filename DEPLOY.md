@@ -28,8 +28,33 @@ What the headers in `vercel.json` do:
   which that header would break.
 - Hashed files under `/assets/` are cached for a year.
 
-Moving to Cloudflare Pages later is the same build and output folder; the headers move into a
-`frontend/public/_headers` file in Cloudflare's format.
+### Cloudflare Pages (the DevNet site at orvane.work)
+
+The same site also runs on Cloudflare Pages, with no Vercel files involved: the security headers are
+in `frontend/public/_headers` (Cloudflare's format, the same values as `vercel.json`; change both
+together), and `/api/oneswap` is `functions/api/oneswap.ts`. Both hosts share the forwarding code in
+`shared/oneswap-forward.ts`.
+
+1. Cloudflare: **Add a domain** → `orvane.work` (Free plan). At the registrar (Namecheap: Domain →
+   Nameservers → Custom DNS) replace the nameservers with the two Cloudflare gives, and wait until
+   Cloudflare shows the domain as active.
+2. **Workers & Pages → Create → Pages → Connect to Git**, pick the repository, then:
+   - Production branch: `main`
+   - Framework preset: None; Root directory: empty (the repository root, where `functions/` is)
+   - Build command: `npm ci --prefix frontend && npm --prefix frontend run build:devnet`
+   - Build output directory: `frontend/dist`
+3. **Variables and secrets** (Production): `NODE_VERSION` = `22`, `VITE_ORVANE_NETWORK` = `devnet`,
+   `VITE_SITE_URL` = `https://orvane.work`, and `ONESWAP_API_KEY` as a **Secret**. Variables only
+   reach a build started after they were set, so deploy again after adding them.
+4. The project's **Custom domains** → add `orvane.work` and `www.orvane.work`; Cloudflare writes the
+   DNS records itself.
+5. On OneSwap, allow `https://orvane.work` (and `https://www.orvane.work`) on the integrator key.
+6. Keep Cloudflare's script injection off for this site (Rocket Loader, Email Address Obfuscation,
+   Web Analytics' automatic setup): the CSP allows scripts from the site only, so injected scripts
+   are blocked.
+
+Locally, `npx wrangler pages dev frontend/dist --binding ONESWAP_API_KEY=<key>` serves a built site
+with the headers and the function, as Cloudflare will.
 
 ### The DevNet site (OneSwap)
 
