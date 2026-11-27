@@ -71,14 +71,14 @@ body {
   text-transform: lowercase;
   gap: 10px;
 }
+/* the particle orb (ui/ParticleMark.tsx); the sphere fills ~80% of its box */
 .mark {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: conic-gradient(var(--cc) 0 50%, var(--usd) 0);
-}
-.mark i {
-  display: none;
+  display: block;
+  width: 30px;
+  height: 30px;
+  margin: -4px -3px -4px -2px;
+  flex: none;
+  overflow: visible;
 }
 .tabs {
   background: transparent;

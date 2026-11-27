@@ -181,10 +181,7 @@ body::after {
 
 /* ---------------------------------------------------------------- top bar */
 .mark {
-  position: relative;
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.08),
-    0 0 18px -4px rgba(127, 168, 255, 0.5);
+  filter: drop-shadow(0 0 5px rgba(127, 168, 255, 0.35));
 }
 .wordmark {
   transition: opacity 0.3s;
@@ -404,10 +401,6 @@ body::after {
   body::after {
     animation: polish-grain 1.2s steps(6) infinite;
   }
-  /* the two-colour orb in the wordmark turns, slowly */
-  .mark {
-    animation: polish-turn 18s linear infinite;
-  }
   .topbar.scrolled::after {
     animation: polish-drift 9s linear infinite;
   }
@@ -496,9 +489,6 @@ body::after {
   67% { transform: translate(3%, 3%); }
   83% { transform: translate(-1%, 4%); }
   100% { transform: translate(0, 0); }
-}
-@keyframes polish-turn {
-  to { transform: rotate(360deg); }
 }
 @keyframes polish-drift {
   from { background-position: 200% 0; }

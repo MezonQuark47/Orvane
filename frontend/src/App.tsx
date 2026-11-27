@@ -15,6 +15,7 @@ import { MarketProvider, useMarket } from './swap/market.tsx'
 
 import { startKinetic } from './ui/kinetic.ts'
 import { WalletMenu } from './ui/WalletMenu.tsx'
+import { ParticleMark } from './ui/ParticleMark.tsx'
 import { scrollToTarget, startSmoothScroll } from './ui/smooth.ts'
 import type { StageScene } from './three/stage.tsx'
 
@@ -114,10 +115,7 @@ function Shell() {
               go('home')
             }}
           >
-            <span className="mark" aria-hidden>
-              <i />
-              <i />
-            </span>
+            <ParticleMark />
             Orvane
           </a>
           <LayoutGroup>
